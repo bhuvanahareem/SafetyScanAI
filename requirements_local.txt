@@ -1,0 +1,8 @@
+# pip install -r requirements_local.txt
+
+fastapi==0.111.0        # Web framework for the local API server
+uvicorn==0.30.0         # ASGI server that runs FastAPI
+python-multipart==0.0.9 # Enables file upload support in FastAPI
+httpx==0.27.0           # Async HTTP client — calls Colab and n8n APIs
+websockets==12.0        # WebSocket support for real-time frontend push
+python-dotenv==1.0.1    # Loads .env file into environment variables

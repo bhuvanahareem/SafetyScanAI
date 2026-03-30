@@ -1,0 +1,15 @@
+#  SECRETS & CONFIG 
+.env
+config.py
+
+#  PYTHON CLUTTER 
+__pycache__/
+safetyScanAI/
+
+#  DATA & MODELS (Large Files) 
+# ignore these to keep the repo light, download them per README
+colab_backend/models/best.pt
+colab_backend/ragSource/safety_manual_for_construction_workers.pdf
+colab_backend/violations/*.jpg
+static/uploads/*.png
+static/uploads/*.jpg
