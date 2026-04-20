@@ -1,512 +1,535 @@
-
-// FRONTEND LOGIC — Connects the browser to the local FastAPI server.
-//   1. WebSocket client with auto-reconnect + health indicator
-//   2. Image upload via drag-and-drop / file picker
-//   3. Browser TTS for instant vocal alerts on violation
-//   4. Violation card creation with slide-in animation
-//   5. Card minimize/expand toggle + vertical stacking
+/**
+ * SAFETY SCAN AI — COMMAND CENTER SPA LOGIC
+ */
 
 // 1. GLOBAL STATE
+let state = {
+  view: 'auth', // auth, setup, monitor, analytics
+  user: JSON.parse(localStorage.getItem('ss_user')) || null,
+  activeSector: null,
+  sectors: [],
+  violationCount: 0,
+  monitorInterval: null,
+  isAnalyzing: false,
+  ws: null
+};
 
-let ws = null;                       // WebSocket connection instance
-let violationCount = 0;              // Running count of violations detected
-let reconnectAttempts = 0;           // Track reconnect tries for backoff
-const MAX_RECONNECT_DELAY = 10000;   // Max wait between reconnects (10s)
+// 2. INITIALIZATION
+document.addEventListener('DOMContentLoaded', () => {
+  initSPA();
+  startClock();
+  checkSystemHealth();
+  setInterval(checkSystemHealth, 15000);
+});
 
+function initSPA() {
+  if (state.user) {
+    autoSwitchToMain();
+  } else {
+    showView('auth');
+  }
 
-// 2. WEBSOCKET — Real-time connection to FastAPI backend
-
-/** Create and manage the WebSocket connection with auto-reconnect. */
-function connectWebSocket() {
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
-
-  ws.onopen = () => {
-    reconnectAttempts = 0;
-    updateConnectionStatus(true);
-    // Heartbeat ping every 25s to prevent server-side timeout
-    ws._pingInterval = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) ws.send("ping");
-    }, 25000);
-  };
-
-  ws.onmessage = (event) => {
-    // Ignore pong responses from our heartbeat
-    if (event.data === "pong") return;
-
-    try {
-      const data = JSON.parse(event.data);
-      if (data.type === "violation") handleViolationEvent(data);
-      if (data.type === "email_sent") handleEmailSentEvent();
-    } catch (err) {
-      console.warn("[WS] Failed to parse message:", err);
-    }
-  };
-
-  ws.onclose = () => {
-    clearInterval(ws._pingInterval);
-    updateConnectionStatus(false);
-    // Reconnect with exponential backoff
-    const delay = Math.min(1000 * 2 ** reconnectAttempts, MAX_RECONNECT_DELAY);
-    reconnectAttempts++;
-    setTimeout(connectWebSocket, delay);
-  };
-
-  ws.onerror = () => ws.close();
+  setupEventListeners();
 }
 
-/** Update the green/red dot + text in the header bar. */
-function updateConnectionStatus(connected) {
-  const dot = document.getElementById("ws-dot");
-  const label = document.getElementById("ws-status");
-  dot.className = `w-2.5 h-2.5 rounded-full ${connected ? "dot-connected" : "dot-disconnected"}`;
-  label.textContent = connected ? "Live" : "Reconnecting…";
-}
-
-
-// 3. HEALTH CHECK — Periodic check for Colab connectivity
-
-/** Poll the /health endpoint every 15s to show Colab status in the header. */
-async function checkSystemHealth() {
+/** Determines if we go to Monitor or Setup based on sectors existence */
+async function autoSwitchToMain() {
   try {
-    const res = await fetch("/health");
-    const data = await res.json();
-
-    const dot = document.getElementById("colab-dot");
-    const label = document.getElementById("colab-status");
-
-    if (data.colab_connected) {
-      dot.className = "w-2.5 h-2.5 rounded-full dot-connected";
-      label.textContent = "Colab: Connected";
+    const res = await fetch(`/sectors/${state.user.user_id}`);
+    const sectors = await res.json();
+    if (sectors && sectors.length > 0) {
+      state.sectors = sectors;
+      state.activeSector = sectors[0];
+      showView('monitor');
+      renderSectors();
+      connectWebSocket();
     } else {
-      dot.className = "w-2.5 h-2.5 rounded-full dot-disconnected";
-      label.textContent = "Colab: Offline";
+      showView('setup');
     }
-  } catch {
-    // Server itself is down
-    document.getElementById("colab-status").textContent = "Colab: Unknown";
+  } catch (err) {
+    showView('auth');
   }
 }
 
-
-// 4. IMAGE UPLOAD — Drag-and-drop + file picker
-
-function setupUpload() {
-  const zone = document.getElementById("upload-zone");
-  const input = document.getElementById("file-input");
-
-  // Drag-and-drop visual feedback
-  zone.addEventListener("dragover", (e) => {
-    e.preventDefault();
-    zone.classList.add("drag-over");
-  });
-  zone.addEventListener("dragleave", () => zone.classList.remove("drag-over"));
-
-  // Handle dropped files
-  zone.addEventListener("drop", (e) => {
-    e.preventDefault();
-    zone.classList.remove("drag-over");
-    const file = e.dataTransfer.files[0];
-    if (file && file.type.startsWith("image/")) uploadImage(file);
+// 3. UI NAVIGATION
+function showView(viewId) {
+  state.view = viewId;
+  const views = ['auth', 'setup', 'monitor', 'analytics'];
+  views.forEach(v => {
+    const el = document.getElementById(`view-${v}`);
+    if (el) el.classList.add('hidden');
   });
 
-  // Handle file picker selection
-  input.addEventListener("change", () => {
-    if (input.files[0]) uploadImage(input.files[0]);
+  const activeView = document.getElementById(`view-${viewId}`);
+  if (activeView) activeView.classList.remove('hidden');
+
+  // Sidebar visibility
+  const sidebar = document.getElementById('global-sidebar');
+  if (viewId === 'monitor' || viewId === 'analytics') {
+    sidebar.classList.remove('hidden');
+    updateSidebarActiveState(viewId);
+  } else {
+    sidebar.classList.add('hidden');
+  }
+
+  // View specific init
+  if (viewId === 'monitor') initMonitor();
+  if (viewId === 'analytics') loadAnalytics();
+}
+
+function updateSidebarActiveState(view) {
+  document.querySelectorAll('.nav-item').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.view === view);
   });
 }
 
-/** Send the selected image to the backend for AI processing. */
-async function uploadImage(file) {
-  // Show loading state
-  document.getElementById("upload-zone").classList.add("hidden");
-  const indicator = document.getElementById("processing-indicator");
-  indicator.classList.remove("hidden");
-  document.getElementById("processing-text").textContent = "Uploading image…";
+// 4. EVENT LISTENERS
+function setupEventListeners() {
+  // Auth Tabs
+  document.getElementById('auth-tab-login').onclick = () => toggleAuthMode('login');
+  document.getElementById('auth-tab-register').onclick = () => toggleAuthMode('register');
 
-  const formData = new FormData();
-  formData.append("file", file);
-  
-  const userName = localStorage.getItem("userName") || "Unknown User";
-  const userEmail = localStorage.getItem("userEmail") || "unknown@example.com";
-  formData.append("user_name", userName);
-  formData.append("user_email", userEmail);
+  // Login Form
+  document.getElementById('login-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    try {
+      const res = await fetch('/login', { method: 'POST', body: formData });
+      if (res.ok) {
+        const data = await res.json();
+        handleAuthSuccess(data);
+      } else {
+        showAuthError('Invalid credentials or server error.');
+      }
+    } catch (err) { showAuthError('Connection failed.'); }
+  };
+
+  // Register Form
+  document.getElementById('register-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    try {
+      const res = await fetch('/register', { method: 'POST', body: formData });
+      if (res.ok) {
+        const data = await res.json();
+        handleAuthSuccess(data);
+      } else { showAuthError('Registration failed.'); }
+    } catch (err) { showAuthError('Connection failed.'); }
+  };
+
+  // Setup Flow
+  document.getElementById('generate-cards-btn').onclick = () => renderSetupCards();
+  document.getElementById('submit-setup-btn').onclick = finalizeSiteSetup;
+
+  // Sidebar Nav
+  document.querySelectorAll('.nav-item').forEach(btn => {
+    btn.onclick = () => showView(btn.dataset.view);
+  });
+
+  // Logout
+  document.getElementById('logout-btn').onclick = () => {
+    localStorage.removeItem('ss_user');
+    location.reload();
+  };
+
+  // Analytics
+  document.getElementById('refresh-analytics').onclick = loadAnalytics;
+  document.getElementById('clear-alerts').onclick = () => {
+    document.getElementById('violation-stack').innerHTML = `
+      <div id="empty-alerts" class="h-full flex flex-col items-center justify-center text-center opacity-30 grayscale">
+        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#DFBC94" stroke-width="1"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+        <p class="italic font-display text-xl mt-4">Static Environment Clean</p>
+      </div>
+    `;
+    state.violationCount = 0;
+    document.getElementById('violation-count').textContent = '0';
+  };
+}
+
+// 5. AUTH LOGIC
+function toggleAuthMode(mode) {
+  const loginForm = document.getElementById('login-form');
+  const registerForm = document.getElementById('register-form');
+  const loginTab = document.getElementById('auth-tab-login');
+  const registerTab = document.getElementById('auth-tab-register');
+
+  if (mode === 'login') {
+    loginForm.classList.remove('hidden');
+    registerForm.classList.add('hidden');
+    loginTab.className = "flex-1 py-2 text-sm font-semibold rounded-lg bg-gold/10 text-gold transition-all";
+    registerTab.className = "flex-1 py-2 text-sm font-semibold rounded-lg text-gold/40 hover:text-gold/80 transition-all";
+  } else {
+    loginForm.classList.add('hidden');
+    registerForm.classList.remove('hidden');
+    registerTab.className = "flex-1 py-2 text-sm font-semibold rounded-lg bg-gold/10 text-gold transition-all";
+    loginTab.className = "flex-1 py-2 text-sm font-semibold rounded-lg text-gold/40 hover:text-gold/80 transition-all";
+  }
+}
+
+function handleAuthSuccess(data) {
+  state.user = data;
+  localStorage.setItem('ss_user', JSON.stringify(data));
+  document.getElementById('admin-display-name').textContent = data.admin_name;
+  autoSwitchToMain();
+}
+
+function showAuthError(msg) {
+  const err = document.getElementById('auth-error');
+  err.textContent = msg;
+  err.classList.remove('hidden');
+  setTimeout(() => err.classList.add('hidden'), 3000);
+}
+
+// 6. SETUP LOGIC
+function renderSetupCards() {
+  const count = parseInt(document.getElementById('sector-count-input').value) || 1;
+  const grid = document.getElementById('sector-cards-grid');
+  grid.innerHTML = '';
+
+  for (let i = 1; i <= count; i++) {
+    const card = document.createElement('div');
+    card.className = "bg-ink-light border border-gold/10 p-6 rounded-2xl space-y-4 animate-fade-in";
+    card.innerHTML = `
+      <div class="flex items-center justify-between">
+        <span class="text-[10px] uppercase tracking-widest text-vermillion font-bold">Sector 0${i}</span>
+        <div class="w-8 h-8 rounded-full bg-gold/5 flex items-center justify-center text-gold italic">0${i}</div>
+      </div>
+      <input type="text" class="sector-name w-full bg-ink border border-gold/5 rounded-xl px-4 py-3 text-sm" placeholder="Sector Name (e.g. Lab A)" required />
+      <div class="grid grid-cols-2 gap-3">
+        <input type="text" class="supervisor-name w-full bg-ink border border-gold/5 rounded-xl px-4 py-2 text-xs" placeholder="Supervisor Name" required />
+        <input type="email" class="supervisor-email w-full bg-ink border border-gold/5 rounded-xl px-4 py-2 text-xs" placeholder="Supervisor Email" required />
+      </div>
+      <div class="relative h-24 rounded-xl border border-dashed border-gold/20 flex flex-col items-center justify-center bg-ink group hover:border-vermillion/50 transition-colors">
+        <input type="file" class="sector-video absolute inset-0 opacity-0 cursor-pointer" accept="video/*" />
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#DFBC94" stroke-width="1.5" class="group-hover:stroke-vermillion"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+        <span class="text-[10px] text-gold/30 mt-2 file-name">Upload CCTV Source</span>
+      </div>
+    `;
+    
+    // File name update listener
+    const fileInput = card.querySelector('.sector-video');
+    fileInput.onchange = (e) => {
+      const name = e.target.files[0]?.name || "Upload CCTV Source";
+      card.querySelector('.file-name').textContent = name;
+    };
+
+    grid.appendChild(card);
+  }
+}
+
+async function finalizeSiteSetup() {
+  const cards = document.querySelectorAll('#sector-cards-grid > div');
+  if (cards.length === 0) return alert('Please define at least one sector.');
+
+  const sectorsToUpload = [];
+  const submitBtn = document.getElementById('submit-setup-btn');
+  submitBtn.disabled = true;
+  submitBtn.textContent = "Deploying Assets...";
 
   try {
-    document.getElementById("processing-text").textContent = "Analyzing image with YOLO…";
+    for (const card of cards) {
+      const name = card.querySelector('.sector-name').value;
+      const sName = card.querySelector('.supervisor-name').value;
+      const sEmail = card.querySelector('.supervisor-email').value;
+      const videoFile = card.querySelector('.sector-video').files[0];
 
-    const response = await fetch("/upload-image", { method: "POST", body: formData });
-    const result = await response.json();
+      if (!name || !sName || !sEmail || !videoFile) throw new Error('All fields are required.');
 
-    if (result.error) {
-      // Show error and reset upload zone
-      alert(`Error: ${result.error}\n${result.hint || ""}`);
-      resetUploadZone();
+      // Upload video first
+      const videoFormData = new FormData();
+      videoFormData.append('file', videoFile);
+      const vidRes = await fetch('/upload-sector-video', { method: 'POST', body: videoFormData });
+      const vidData = await vidRes.json();
+
+      sectorsToUpload.push({
+        name,
+        supervisor_name: sName,
+        supervisor_email: sEmail,
+        video_filename: vidData.filename
+      });
+    }
+
+    // Save metadata
+    const setupData = new FormData();
+    setupData.append('admin_id', state.user.user_id);
+    setupData.append('sectors_json', JSON.stringify(sectorsToUpload));
+    
+    const res = await fetch('/setup-site', { method: 'POST', body: setupData });
+    if (res.ok) {
+      showToast('System configured successfully.');
+      autoSwitchToMain();
+    } else {
+      throw new Error('Failed to save configuration.');
+    }
+  } catch (err) {
+    alert(err.message);
+    submitBtn.disabled = false;
+    submitBtn.textContent = "Finalize Command Center";
+  }
+}
+
+// 7. MONITOR LOGIC
+function initMonitor() {
+  if (!state.activeSector) return;
+  
+  document.getElementById('admin-display-name').textContent = state.user.admin_name;
+  switchSector(state.activeSector.id);
+  
+  // Start Sampling Loop (10 seconds)
+  if (state.monitorInterval) clearInterval(state.monitorInterval);
+  state.monitorInterval = setInterval(captureFrame, 10000);
+}
+
+function renderSectors() {
+  const list = document.getElementById('sector-list');
+  list.innerHTML = '';
+  state.sectors.forEach(s => {
+    const btn = document.createElement('button');
+    btn.className = `sector-btn w-full text-left p-4 rounded-xl group hover:bg-gold/5 transition-all mb-2 ${state.activeSector?.id === s.id ? 'active' : ''}`;
+    btn.innerHTML = `
+      <div class="flex items-center gap-3">
+        <div class="w-8 h-8 rounded-lg bg-gold/10 flex items-center justify-center italic font-display text-gold group-hover:bg-vermillion group-hover:text-cream transition-all">${s.sector_name.charAt(0)}</div>
+        <div>
+          <span class="block text-sm font-semibold text-cream">${s.sector_name}</span>
+          <span class="text-[9px] uppercase tracking-widest text-gold/30">${s.supervisor_name}</span>
+        </div>
+      </div>
+    `;
+    btn.onclick = () => switchSector(s.id);
+    list.appendChild(btn);
+  });
+}
+
+function switchSector(id) {
+  const sector = state.sectors.find(s => s.id === id);
+  if (!sector) return;
+  state.activeSector = sector;
+  
+  // Update UI
+  document.getElementById('current-sector-title').textContent = sector.sector_name;
+  document.getElementById('meta-sector-id').textContent = sector.id;
+  renderSectors();
+
+  // Update Video
+  const video = document.getElementById('main-video');
+  video.src = `/static/uploads/sectors/${sector.video_filename}`;
+  video.play();
+  
+  showToast(`Switched to ${sector.sector_name}`);
+}
+
+async function captureFrame() {
+  if (state.isAnalyzing || !state.activeSector) return;
+
+  const video = document.getElementById('main-video');
+  const canvas = document.getElementById('capture-canvas');
+  const statusLabel = document.getElementById('monitor-status-text');
+
+  // Capture
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(video, 0, 0);
+
+  statusLabel.textContent = "Analyzing Frame...";
+  state.isAnalyzing = true;
+
+  canvas.toBlob(async (blob) => {
+    const formData = new FormData();
+    formData.append('file', blob, `sector_${state.activeSector.id}_${Date.now()}.jpg`);
+    formData.append('sector_id', state.activeSector.id);
+    formData.append('admin_id', state.user.user_id);
+
+    try {
+      const res = await fetch('/process-frame', { method: 'POST', body: formData });
+      const data = await res.json();
+
+      if (data.tier === 1 && data.status === 'safe') {
+        showSafePulse();
+        statusLabel.textContent = "Environment Clear";
+      } else if (data.status === 'processing') {
+        statusLabel.textContent = "Deep Analysis Running...";
+      } else if (data.status === 'complete') {
+        statusLabel.textContent = "Violation Recorded";
+      }
+    } catch (err) {
+      console.error('Frame process failed:', err);
+      statusLabel.textContent = "Static Connection Error";
+    } finally {
+      state.isAnalyzing = false;
+      setTimeout(() => {
+        if (!state.isAnalyzing) statusLabel.textContent = "Real-time Stream Integration";
+      }, 2000);
+    }
+  }, 'image/jpeg', 0.8);
+}
+
+function showSafePulse() {
+  const pulse = document.getElementById('safe-pulse');
+  pulse.classList.add('active');
+  setTimeout(() => pulse.classList.remove('active'), 1000);
+}
+
+// 8. WEBSOCKET
+function connectWebSocket() {
+  if (state.ws) return;
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  state.ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+
+  state.ws.onmessage = (e) => {
+    if (e.data === 'pong') return;
+    try {
+      const data = JSON.parse(e.data);
+      if (data.type === 'violation') handleViolation(data);
+    } catch (err) {}
+  };
+
+  state.ws.onclose = () => {
+    state.ws = null;
+    setTimeout(connectWebSocket, 5000);
+  };
+}
+
+function handleViolation(data) {
+  // TTS
+  if (window.speechSynthesis) {
+    const utter = new SpeechSynthesisUtterance(`Alert: ${data.violation_class} in ${data.sector_name}`);
+    utter.rate = 0.9;
+    window.speechSynthesis.speak(utter);
+  }
+
+  // Counter
+  state.violationCount++;
+  document.getElementById('violation-count').textContent = state.violationCount;
+
+  // Render Card
+  const stack = document.getElementById('violation-stack');
+  const empty = document.getElementById('empty-alerts');
+  if (empty) empty.remove();
+
+  const card = document.createElement('div');
+  card.className = "violation-card animate-slide-in-right";
+  card.innerHTML = `
+    <div class="relative">
+      <img src="${data.uploaded_image_url}" class="violation-image" />
+      <div class="absolute top-4 left-4">
+        <span class="violation-badge">${data.violation_class || 'Violation'}</span>
+      </div>
+      <div class="absolute top-4 right-4 text-[10px] text-white/60 bg-black/40 px-2 py-1 rounded">
+        ${new Date().toLocaleTimeString()}
+      </div>
+    </div>
+    <div class="p-6">
+      <h4 class="font-display text-xl italic text-gold">${data.sector_name || 'Restricted Zone'}</h4>
+      <div class="flex items-center gap-2 mt-1">
+        <span class="w-1.5 h-1.5 rounded-full bg-vermillion"></span>
+        <span class="text-[10px] uppercase text-gold/40 tracking-widest">Supervisor: ${data.supervisor_name || 'Node Lead'}</span>
+      </div>
+      
+      <div class="agent-report-container">
+        <span class="agent-tag">▸ Intelligence Report</span>
+        <p>${data.agent_report || 'Processing agent insights...'}</p>
+      </div>
+    </div>
+  `;
+  stack.prepend(card);
+  showToast(`ALARM: ${data.violation_class} in ${data.sector_name}`);
+}
+
+// 9. ANALYTICS LOGIC
+async function loadAnalytics() {
+  const body = document.getElementById('incidents-table-body');
+  const empty = document.getElementById('analytics-empty');
+  body.innerHTML = '';
+  
+  try {
+    const res = await fetch('/incidents');
+    const data = await res.json();
+    
+    if (data.length === 0) {
+      empty.classList.remove('hidden');
       return;
     }
-
-    // If Colab returned results synchronously, the WebSocket handler
-    // already created the card. Show the uploaded image.
-    if (result.status === "complete" && result.data) {
-      showDetectionView(result.data);
-    } else if (result.status === "processing") {
-      // Colab is still working — poll for status
-      document.getElementById("processing-text").textContent = "AI pipeline running…";
-      pollJobStatus(result.job_id, result.image_url);
-    }
-
-  } catch (err) {
-    alert("Upload failed. Is the server running?");
-    console.error(err);
-    resetUploadZone();
-  }
-}
-
-/** Poll Colab job status every 2s (fallback if WebSocket push fails). */
-function pollJobStatus(jobId, imageUrl) {
-  const poll = setInterval(async () => {
-    try {
-      const res = await fetch(`/job-status/${jobId}`);
-      const status = await res.json();
-      if (status.status === "complete") {
-        clearInterval(poll);
-        showDetectionView(status.data || status);
-      } else if (status.status === "error") {
-        clearInterval(poll);
-        alert("Processing failed: " + (status.message || "Unknown error"));
-        resetUploadZone();
-      }
-    } catch {
-      clearInterval(poll);
-      resetUploadZone();
-    }
-  }, 2000);
-}
-
-/** Display the annotated image with bounding boxes. */
-function showDetectionView(data) {
-  document.getElementById("processing-indicator").classList.add("hidden");
-  const view = document.getElementById("detection-view");
-  view.classList.remove("hidden");
-
-  // Show the annotated image (base64 from Colab or local URL)
-  const img = document.getElementById("detected-image");
-  if (data.annotated_image_base64) {
-    img.src = `data:image/jpeg;base64,${data.annotated_image_base64}`;
-  } else if (data.uploaded_image_url) {
-    img.src = data.uploaded_image_url;
-  }
-
-  // Show detection summary text
-  const summary = document.getElementById("detection-summary");
-  const classes = data.violation_class || data.violations_found || "Analysis complete";
-  summary.textContent = typeof classes === "string" ? classes : classes.join(" · ");
-}
-
-/** Reset the upload zone so user can upload another image. */
-function resetUploadZone() {
-  document.getElementById("processing-indicator").classList.add("hidden");
-  document.getElementById("upload-zone").classList.remove("hidden");
-  document.getElementById("file-input").value = "";
-}
-
-
-// 5. VIOLATION EVENT HANDLER — TTS + Card creation
-
-/** Called when a violation event arrives via WebSocket. */
-function handleViolationEvent(data) {
-  // Play browser TTS vocal alert
-  speakAlert(data.violation_class);
-
-  // Show detection view if not already visible
-  showDetectionView(data);
-
-  // Create the violation card in the sidebar
-  createViolationCard(data);
-
-  // Update violation counter in header
-  violationCount++;
-  document.getElementById("violation-count").textContent = violationCount;
-
-  // Remove the empty-state placeholder
-  const empty = document.getElementById("empty-state");
-  if (empty) empty.remove();
-}
-
-/** Speak a violation alert using the browser's built-in TTS engine. */
-function speakAlert(violationClass) {
-  if (!window.speechSynthesis) return;
-
-  // Convert class name to natural language (e.g. "no-vest" → "No Vest")
-  const label = (violationClass || "violation")
-    .split(/[_-]/)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
-
-  const utterance = new SpeechSynthesisUtterance(`Violation Detected! ${label}`);
-  utterance.rate = 1.0;
-  utterance.pitch = 0.9;
-  utterance.volume = 1.0;
-  window.speechSynthesis.speak(utterance);
-}
-
-
-// 6. VIOLATION CARD — Build, animate, minimize
-
-/** Create a rich violation card with all pipeline output sections. */
-function createViolationCard(data) {
-  const card = document.createElement("div");
-  card.className = "violation-card slide-in";
-  const cardId = `card-${Date.now()}`;
-  card.id = cardId;
-
-  // Determine the badge class for color-coding
-  const badgeClass = (data.violation_class || "").includes("helmet") ? "no-helmet" : "no-vest";
-  const timeStr = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString();
-
-  //  Build card HTML 
-  card.innerHTML = `
-    <!-- HEADER: violation type badge + timestamp + minimize button -->
-    <div class="card-header" onclick="toggleCard('${cardId}')">
-      <span class="badge ${badgeClass}">${data.violation_class || "Violation"}</span>
-      <span class="timestamp">${timeStr}</span>
-      <button class="minimize-btn" onclick="event.stopPropagation(); minimizeCard('${cardId}')" title="Minimize">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/></svg>
-      </button>
-    </div>
-
-    <!-- BODY: all pipeline results stacked vertically -->
-    <div class="card-body" id="body-${cardId}">
-      <!-- Input image snapshot -->
-      ${buildSnapshotSection(data)}
-
-      <!-- Similar Incident History (Image-to-Image retrieval) -->
-      ${buildSimilarSection(data)}
-
-      <!-- RAG output snippet (OSHA legal references) -->
-      ${buildRagSection(data)}
-
-      <!-- Agent Report (CrewAI Safety Auditor + Legal Critic output) -->
-      ${buildAgentSection(data)}
-    </div>
-  `;
-
-  // Insert at the top of the cards container
-  const container = document.getElementById("cards-container");
-  container.prepend(card);
-}
-
-/** Snapshot image at the top of each card. */
-function buildSnapshotSection(data) {
-  let src = "";
-  if (data.snapshot_base64) src = `data:image/jpeg;base64,${data.snapshot_base64}`;
-  else if (data.uploaded_image_url) src = data.uploaded_image_url;
-  else if (data.annotated_image_base64) src = `data:image/jpeg;base64,${data.annotated_image_base64}`;
-  if (!src) return "";
-  return `<img src="${src}" alt="Violation snapshot" loading="lazy" />`;
-}
-
-/** Image-to-image similar incidents grid. */
-function buildSimilarSection(data) {
-  const score = data.similarity_score ?? data.similarity ?? null;
-  const images = data.similar_images || [];
-
-  if (score === null && images.length === 0) return "";
-
-  let html = `<div class="card-section-title">Similar Incident History</div>`;
-
-  // Similarity score bar
-  if (score !== null) {
-    const pct = Math.min(Math.round(score * 100), 100);
-    html += `
-      <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:rgba(223,188,148,0.6);margin-bottom:4px">
-        <span>Similarity</span><span>${typeof score === "number" ? score.toFixed(3) : score}</span>
-      </div>
-      <div class="score-bar"><div class="score-bar-fill" style="width:${pct}%"></div></div>
-    `;
-  }
-
-  // Grid of similar images (up to 6)
-  if (images.length > 0) {
-    html += `<div class="similar-grid" style="margin-top:10px">`;
-    images.slice(0, 6).forEach((img) => {
-      const imgSrc = img.startsWith("data:") ? img : `data:image/jpeg;base64,${img}`;
-      html += `<img src="${imgSrc}" alt="Similar incident" loading="lazy" />`;
+    
+    empty.classList.add('hidden');
+    data.forEach(inc => {
+      const row = document.createElement('tr');
+      row.className = "group transition-colors";
+      row.innerHTML = `
+        <td class="px-8 py-6 text-sm font-light text-gold/60">#INC-${inc.id.toString().padStart(4, '0')}</td>
+        <td class="px-8 py-6">
+           <span class="text-sm font-semibold text-gold">${inc.sector_name}</span>
+        </td>
+        <td class="px-8 py-6 text-xs text-gold/40">${new Date(inc.timestamp).toLocaleString()}</td>
+        <td class="px-8 py-6">
+           <span class="px-3 py-1 bg-vermillion/10 text-vermillion-light text-[10px] rounded uppercase font-bold border border-vermillion/20">${inc.violation_type}</span>
+        </td>
+        <td class="px-8 py-6">
+           <button class="text-gold hover:text-cream text-[10px] uppercase underline tracking-widest font-bold" onclick="window.open('${inc.image_url}', '_blank')">View Evidence</button>
+        </td>
+        <td class="px-8 py-6">
+           <span class="status-badge status-${inc.status.toLowerCase()}">${inc.status}</span>
+        </td>
+        <td class="px-8 py-6 text-right">
+           ${inc.status === 'Pending' ? `
+             <button class="text-[10px] uppercase tracking-widest font-bold px-4 py-2 border border-gold/10 rounded-lg hover:border-vermillion hover:text-vermillion transition-all" onclick="resolveIncident(${inc.id}, this)">Resolve</button>
+           ` : '<span class="text-gold/20 text-[10px] uppercase font-bold">Authenticated</span>'}
+        </td>
+      `;
+      body.appendChild(row);
     });
-    html += `</div>`;
-  }
-
-  return html;
+  } catch (err) {}
 }
 
-/** RAG output snippet (OSHA clause + penalties). */
-function buildRagSection(data) {
-  if (!data.rag_snippet) return "";
-  return `
-    <div class="card-section-title">OSHA Legal Reference</div>
-    <div class="rag-snippet">${escapeHtml(data.rag_snippet)}</div>
-  `;
+async function resolveIncident(id, btn) {
+  btn.disabled = true;
+  btn.textContent = "...";
+  try {
+    const res = await fetch(`/incidents/${id}/resolve`, { method: 'POST' });
+    if (res.ok) {
+      showToast(`Incident #${id} resolved.`);
+      loadAnalytics();
+    }
+  } catch (err) {}
 }
 
-/** Agent Chain report (Safety Auditor + Legal Critic). */
-function buildAgentSection(data) {
-  if (!data.agent_report) return "";
-  return `
-    <div class="card-section-title">Agent Report</div>
-    <div class="agent-console">
-      <span class="agent-1">▸ Safety Auditor → Legal Critic</span><br/>
-      <pre style="white-space:pre-wrap;margin:6px 0 0">${escapeHtml(data.agent_report)}</pre>
-    </div>
-  `;
-}
-
-
-// 7. CARD INTERACTIONS — Toggle body & minimize to stack
-
-/** Expand or collapse the card body on header click. */
-function toggleCard(cardId) {
-  const body = document.getElementById(`body-${cardId}`);
-  if (!body) return;
-  body.style.display = body.style.display === "none" ? "block" : "none";
-}
-
-/** Move the card to the minimized stack at the bottom. */
-function minimizeCard(cardId) {
-  const card = document.getElementById(cardId);
-  if (!card) return;
-
-  // Extract badge text for the minimized label
-  const badge = card.querySelector(".badge");
-  const time = card.querySelector(".timestamp");
-  const label = badge ? badge.textContent : "Violation";
-  const timeText = time ? time.textContent : "";
-
-  // Hide the full card
-  card.style.display = "none";
-
-  // Create a minimized entry in the bottom stack
-  const mini = document.createElement("div");
-  mini.className = "minimized-card";
-  mini.innerHTML = `
-    <span class="badge ${badge?.classList[1] || "no-vest"}" style="font-size:0.65rem;padding:2px 6px">${label}</span>
-    <span class="timestamp">${timeText}</span>
-  `;
-
-  // Click on minimized card to restore it
-  mini.addEventListener("click", () => {
-    card.style.display = "block";
-    mini.remove();
-  });
-
-  document.getElementById("minimized-stack").prepend(mini);
-}
-
-
-// 8. UTILITY FUNCTIONS
-
-/** Prevent XSS by escaping HTML entities in dynamic content. */
-function escapeHtml(str) {
-  const div = document.createElement("div");
-  div.textContent = str;
-  return div.innerHTML;
-}
-
-/** Live clock in the header — updates every second. */
+// 10. HELPERS
 function startClock() {
-  const clockEl = document.getElementById("live-clock");
-  const dateEl = document.getElementById("live-date");
-
+  const clock = document.getElementById('live-clock');
+  const dateEl = document.getElementById('live-date');
   function tick() {
     const now = new Date();
-    clockEl.textContent = now.toLocaleTimeString("en-US", { hour12: false });
-    dateEl.textContent = now.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+    clock.textContent = now.toLocaleTimeString('en-GB');
+    dateEl.textContent = now.toLocaleDateString('en-GB', { weekday: 'long', day: '2-digit', month: 'long' });
   }
-  tick();
-  setInterval(tick, 1000);
+  setInterval(tick, 1000); tick();
 }
 
-
-// 9. ONBOARDING & TOAST NOTIFICATIONS
-
-/** Show onboarding modal if user details aren't stored */
-function setupOnboarding() {
-  const modal = document.getElementById("user-modal");
-  const inputName = document.getElementById("user-name-input");
-  const inputEmail = document.getElementById("user-email-input");
-  const submitBtn = document.getElementById("modal-submit-btn");
-  const errorMsg = document.getElementById("modal-error");
-
-  const storedName = localStorage.getItem("userName");
-  const storedEmail = localStorage.getItem("userEmail");
-
-  if (!storedName || !storedEmail) {
-    modal.classList.remove("hidden");
+async function checkSystemHealth() {
+  const label = document.getElementById('colab-status-text');
+  try {
+    const res = await fetch('/health');
+    const data = await res.json();
+    label.textContent = data.colab_connected ? "Neural Engine Live" : "Colab Disconnected";
+    label.classList.toggle('text-vermillion', !data.colab_connected);
+  } catch (err) {
+    label.textContent = "Local Server Offline";
   }
-
-  submitBtn.addEventListener("click", () => {
-    const name = inputName.value.trim();
-    const email = inputEmail.value.trim();
-    
-    if (name && email) {
-      localStorage.setItem("userName", name);
-      localStorage.setItem("userEmail", email);
-      modal.classList.add("hidden");
-      errorMsg.classList.add("hidden");
-    } else {
-      errorMsg.classList.remove("hidden");
-    }
-  });
 }
 
-/** Show a toast notification when N8N finishes sending the email */
-function handleEmailSentEvent() {
-  const container = document.getElementById("toast-container");
-  
-  const toast = document.createElement("div");
-  toast.className = "bg-green-500/10 border border-green-500/50 text-green-400 px-4 py-3 rounded-xl shadow-lg flex items-center gap-3 slide-in backdrop-blur-md";
+function showToast(msg) {
+  const container = document.getElementById('toast-container');
+  const toast = document.createElement('div');
+  toast.className = "px-6 py-4 rounded-xl shadow-2xl border border-gold/20 bg-ink-medium text-cream text-sm font-semibold animate-slide-in-right flex items-center gap-3";
   toast.innerHTML = `
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-    <div class="flex flex-col">
-      <span class="text-sm font-semibold text-cream">The email has been sent</span>
-      <span class="text-xs opacity-80">Compliance report dispatched securely.</span>
-    </div>
+    <div class="w-2 h-2 rounded-full bg-vermillion"></div>
+    <span>${msg}</span>
   `;
-  
   container.appendChild(toast);
-  
-  // Remove after 5 seconds
   setTimeout(() => {
-    toast.style.opacity = "0";
-    toast.style.transform = "translateX(20px)";
-    toast.style.transition = "all 0.3s ease";
-    setTimeout(() => toast.remove(), 300);
-  }, 5000);
+    toast.style.opacity = '0';
+    toast.style.transform = 'translateY(10px)';
+    toast.style.transition = 'all 0.5s';
+    setTimeout(() => toast.remove(), 500);
+  }, 4000);
 }
-
-
-// 10. INITIALIZATION — Run when the page loads
-
-document.addEventListener("DOMContentLoaded", () => {
-  setupOnboarding();        // Ask for user info if missing
-  connectWebSocket();       // Open real-time connection to backend
-  setupUpload();            // Attach drag-and-drop + file picker handlers
-  startClock();             // Start the live header clock
-  checkSystemHealth();      // Initial health check
-  setInterval(checkSystemHealth, 15000); // Re-check every 15 seconds
-
-  // Clear all cards button
-  document.getElementById("clear-cards-btn").addEventListener("click", () => {
-    document.getElementById("cards-container").innerHTML = `
-      <div id="empty-state" class="flex flex-col items-center justify-center h-full text-center opacity-60">
-        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#DFBC94" stroke-width="1" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-        <p class="mt-4 text-gold/50 text-sm">No violations detected yet.<br/>Upload an image to begin scanning.</p>
-      </div>
-    `;
-    document.getElementById("minimized-stack").innerHTML = "";
-    violationCount = 0;
-    document.getElementById("violation-count").textContent = "0";
-    // Show upload zone again
-    resetUploadZone();
-    document.getElementById("detection-view").classList.add("hidden");
-  });
-});

@@ -3,18 +3,17 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="description" content="SafetyScanAI — Real-time AI safety monitoring command center for PPE violation detection" />
+  <meta name="description" content="SafetyScanAI — Multi-Sector Security Command Center" />
   <title>SafetyScanAI — Command Center</title>
 
-  <!-- Typography: DM Serif Display (headings) + DM Sans (body) -->
+  <!-- Typography: Cormorant Garamond (Display) + Outfit (Body) -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,600;1,300&family=Outfit:wght@300;400;600&display=swap" rel="stylesheet" />
 
-  <!-- Tailwind CSS via CDN for utility classes -->
+  <!-- Tailwind CSS via CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
-    /* Extend Tailwind with our project palette */
     tailwind.config = {
       theme: {
         extend: {
@@ -22,154 +21,263 @@
             vermillion: { DEFAULT: '#B53325', light: '#D04A3B', dark: '#8A2519' },
             cream:      { DEFAULT: '#F4E2CE', light: '#FAF3EB', dark: '#E8D0B4' },
             gold:       { DEFAULT: '#DFBC94', light: '#EAD4B5', dark: '#C9A06E' },
-            ink:        { DEFAULT: '#1A1210', light: '#2D2320', medium: '#3D2E28' },
+            ink:        { DEFAULT: '#0F0A09', light: '#1C1513', medium: '#2D2320' },
           },
           fontFamily: {
-            display: ['"DM Serif Display"', 'serif'],
-            body:    ['"DM Sans"', 'sans-serif'],
+            display: ['"Cormorant Garamond"', 'serif'],
+            body:    ['Outfit', 'sans-serif'],
           },
         },
       },
     };
   </script>
 
-  <!-- Custom styles for animations, textures, and overrides -->
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 
-<body class="bg-ink text-cream font-body min-h-screen overflow-hidden">
-  <!--  NOISE TEXTURE OVERLAY — adds grain depth to background  -->
+<body class="bg-ink text-cream font-body min-h-screen">
+  <!-- NOISE OVERLAY -->
   <div id="noise-overlay" aria-hidden="true"></div>
 
-  <!--  ONBOARDING MODAL  -->
-  <div id="user-modal" class="fixed inset-0 z-[100] flex items-center justify-center bg-ink/90 backdrop-blur-md hidden">
-    <div class="bg-ink-medium border border-gold/20 rounded-2xl p-8 max-w-sm w-full mx-4 shadow-2xl">
-      <h2 class="font-display text-2xl text-cream mb-2">Welcome to SafetyScan<span class="text-vermillion">AI</span></h2>
-      <p class="text-gold/70 text-sm mb-6">Please provide your details to customize compliance reports.</p>
-      
-      <div class="space-y-4">
-        <div>
-          <label class="block text-cream/80 text-xs uppercase tracking-wider mb-1">Full Name</label>
-          <input type="text" id="user-name-input" class="w-full bg-ink border border-gold/10 rounded-lg px-4 py-2 text-cream focus:outline-none focus:border-vermillion/50 transition-colors" placeholder="Jane Doe" required autocomplete="off" />
+  <!-- AUTH VIEW (Login/Register) -->
+  <section id="view-auth" class="fixed inset-0 z-[100] flex items-center justify-center bg-ink p-6 transition-all duration-500">
+    <div class="max-w-md w-full animate-fade-in">
+      <div class="text-center mb-10">
+        <div class="inline-flex w-16 h-16 rounded-2xl bg-vermillion items-center justify-center mb-6 rotate-3 shadow-xl">
+           <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#F4E2CE" stroke-width="2.5"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
         </div>
-        <div>
-          <label class="block text-cream/80 text-xs uppercase tracking-wider mb-1">Email Address</label>
-          <input type="email" id="user-email-input" class="w-full bg-ink border border-gold/10 rounded-lg px-4 py-2 text-cream focus:outline-none focus:border-vermillion/50 transition-colors" placeholder="jane@example.com" required autocomplete="off" />
+        <h1 class="font-display text-5xl text-cream italic">SafetyScan<span class="text-vermillion not-italic font-bold">AI</span></h1>
+        <p class="text-gold/60 mt-2 tracking-widest uppercase text-[10px]">Security Intelligence System</p>
+      </div>
+
+      <!-- Auth Toggle -->
+      <div class="bg-ink-light p-1 rounded-xl border border-gold/10 flex mb-8">
+        <button id="auth-tab-login" class="flex-1 py-2 text-sm font-semibold rounded-lg bg-gold/10 text-gold transition-all">Staff Login</button>
+        <button id="auth-tab-register" class="flex-1 py-2 text-sm font-semibold rounded-lg text-gold/40 hover:text-gold/80 transition-all">New Deployment</button>
+      </div>
+
+      <!-- Login Form -->
+      <form id="login-form" class="space-y-4">
+        <div class="group">
+          <label class="block text-[10px] uppercase tracking-[0.2em] text-gold/40 mb-1 group-focus-within:text-vermillion/80 transition-colors">Credential Identifier</label>
+          <input type="email" name="email" class="w-full bg-ink-light border border-gold/10 rounded-xl px-5 py-3 text-cream focus:outline-none focus:border-vermillion/50 focus:ring-1 focus:ring-vermillion/20 transition-all font-light" placeholder="admin@center.lab" required />
         </div>
-        <button id="modal-submit-btn" class="w-full mt-4 bg-vermillion hover:bg-vermillion-light text-cream font-medium py-2.5 rounded-lg transition-colors flex items-center justify-center gap-2">
-          Enter Command Center <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        <div class="group">
+          <label class="block text-[10px] uppercase tracking-[0.2em] text-gold/40 mb-1 group-focus-within:text-vermillion/80 transition-colors">Access Cipher</label>
+          <input type="password" name="password" class="w-full bg-ink-light border border-gold/10 rounded-xl px-5 py-3 text-cream focus:outline-none focus:border-vermillion/50 focus:ring-1 focus:ring-vermillion/20 transition-all font-light" placeholder="••••••••" required />
+        </div>
+        <button type="submit" class="w-full py-4 bg-vermillion hover:bg-vermillion-light text-cream font-bold rounded-xl transition-all translate-y-2 hover:translate-y-0 shadow-lg shadow-vermillion/20 flex items-center justify-center gap-3">
+          Initialize Session <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M13.8 12H3"/></svg>
         </button>
-      </div>
-      <p id="modal-error" class="text-vermillion text-xs mt-3 hidden text-center">Please fill out both fields.</p>
+      </form>
+
+      <!-- Register Form (Hidden) -->
+      <form id="register-form" class="space-y-4 hidden">
+        <div class="group">
+          <label class="block text-[10px] uppercase tracking-[0.2em] text-gold/40 mb-1">Administrative Name</label>
+          <input type="text" name="admin_name" class="w-full bg-ink-light border border-gold/10 rounded-xl px-5 py-3 text-cream focus:outline-none focus:border-vermillion/50 transition-all font-light" placeholder="Officer Sarah" required />
+        </div>
+        <div class="group">
+          <label class="block text-[10px] uppercase tracking-[0.2em] text-gold/40 mb-1">Deployment Email</label>
+          <input type="email" name="email" class="w-full bg-ink-light border border-gold/10 rounded-xl px-5 py-3 text-cream focus:outline-none focus:border-vermillion/50 transition-all font-light" placeholder="sarah@safety.scan" required />
+        </div>
+        <div class="group">
+          <label class="block text-[10px] uppercase tracking-[0.2em] text-gold/40 mb-1">Secure Cipher</label>
+          <input type="password" name="password" class="w-full bg-ink-light border border-gold/10 rounded-xl px-5 py-3 text-cream focus:outline-none focus:border-vermillion/50 transition-all font-light" placeholder="••••••••" required />
+        </div>
+        <button type="submit" class="w-full py-4 bg-vermillion hover:bg-vermillion-light text-cream font-bold rounded-xl transition-all shadow-lg shadow-vermillion/20">
+          Authorize Deployment
+        </button>
+      </form>
+
+      <p id="auth-error" class="text-vermillion text-xs mt-6 text-center italic hidden">Invalid credentials entered.</p>
     </div>
-  </div>
+  </section>
 
-  <!-- 
-       HEADER BAR — System title, health indicators, live clock
-        -->
-  <header id="header-bar" class="fixed top-0 left-0 w-full z-50 border-b border-gold/20">
-    <div class="max-w-[1920px] mx-auto flex items-center justify-between px-6 py-3">
-      <!-- Left: Brand -->
-      <div class="flex items-center gap-3">
-        <div class="w-9 h-9 rounded-md bg-vermillion flex items-center justify-center">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#F4E2CE" stroke-width="2.5" stroke-linecap="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+  <!-- SETUP VIEW (Onboarding) -->
+  <section id="view-setup" class="fixed inset-0 z-[90] flex flex-col bg-ink p-10 overflow-y-auto hidden">
+    <div class="max-w-4xl mx-auto w-full">
+      <div class="flex items-center justify-between mb-12">
+        <div>
+          <h2 class="font-display text-4xl mb-2 italic">Site Configuration</h2>
+          <p class="text-gold/50 text-sm tracking-wide">Define surveillance sectors and reporting hierarchy.</p>
         </div>
-        <h1 class="font-display text-xl tracking-wide text-cream">SafetyScan<span class="text-vermillion">AI</span></h1>
-      </div>
-
-      <!-- Center: Status indicators -->
-      <div class="hidden md:flex items-center gap-6 text-sm">
-        <div class="flex items-center gap-2">
-          <span id="ws-dot" class="w-2.5 h-2.5 rounded-full bg-vermillion animate-pulse"></span>
-          <span id="ws-status" class="text-gold/70">Connecting…</span>
-        </div>
-        <div class="flex items-center gap-2">
-          <span id="colab-dot" class="w-2.5 h-2.5 rounded-full bg-vermillion/40"></span>
-          <span id="colab-status" class="text-gold/70">Colab: Checking…</span>
-        </div>
-        <div class="flex items-center gap-2">
-          <span class="text-gold/40">│</span>
-          <span id="violation-count" class="text-cream/80 font-semibold">0</span>
-          <span class="text-gold/50">violations</span>
+        <div class="flex items-center gap-4">
+          <label class="text-[10px] uppercase text-gold/40">Sectors Count</label>
+          <input type="number" id="sector-count-input" value="1" min="1" max="10" class="w-16 bg-ink-light border border-gold/20 rounded-lg px-3 py-2 text-gold focus:outline-none" />
+          <button id="generate-cards-btn" class="bg-gold/10 text-gold px-4 py-2 rounded-lg text-xs font-bold hover:bg-gold/20">Initialize Sectors</button>
         </div>
       </div>
 
-      <!-- Right: Live clock -->
-      <div class="text-right text-sm text-gold/60">
-        <div id="live-clock" class="font-mono tracking-wider">--:--:--</div>
-        <div id="live-date" class="text-xs text-gold/40">---</div>
+      <div id="sector-cards-grid" class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-12">
+        <!-- Dynamic Cards Here -->
+      </div>
+
+      <div class="flex justify-end pt-10 border-t border-gold/10">
+        <button id="submit-setup-btn" class="bg-vermillion text-cream px-10 py-4 rounded-xl font-bold shadow-xl hover:bg-vermillion-light transition-all">Finalize Command Center</button>
       </div>
     </div>
-  </header>
+  </section>
 
-  <!-- 
-       MAIN LAYOUT — Upload zone (left) + Violation cards (right)
-        -->
-  <main class="pt-[68px] h-screen flex">
-
-    <!--  LEFT PANEL: Upload & Detection View  -->
-    <section id="main-panel" class="flex-1 flex flex-col items-center justify-center p-8 overflow-y-auto">
-
-      <!-- Upload zone: drag-and-drop + file input -->
-      <div id="upload-zone" class="upload-zone w-full max-w-2xl aspect-[4/3] rounded-2xl border-2 border-dashed border-gold/30 flex flex-col items-center justify-center gap-4 cursor-pointer transition-all duration-300 hover:border-vermillion/60 hover:bg-vermillion/5 relative">
-        <!-- Drop icon -->
-        <div class="upload-icon w-16 h-16 rounded-full bg-ink-medium border border-gold/20 flex items-center justify-center">
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#DFBC94" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+  <!-- GLOBAL SIDEBAR (Slim Dark) -->
+  <aside id="global-sidebar" class="fixed top-0 left-0 h-screen w-20 flex flex-col items-center py-8 bg-ink border-r border-gold/10 z-[80] hidden">
+    <div class="w-10 h-10 rounded-xl bg-vermillion flex items-center justify-center mb-12 shadow-inner">
+       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#F4E2CE" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+    </div>
+    
+    <nav class="flex flex-col gap-8 flex-1">
+      <button class="nav-item active group" data-view="monitor" title="Live Monitor">
+        <div class="w-12 h-12 rounded-xl flex items-center justify-center text-gold/40 group-hover:bg-gold/5 group-hover:text-gold transition-all">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
         </div>
-        <p class="text-gold/70 text-sm text-center">
-          <span class="text-cream font-semibold">Drop an image here</span><br/>
-          or click to browse
-        </p>
-        <p class="text-gold/40 text-xs">JPG, PNG — Max 10MB</p>
-        <input type="file" id="file-input" accept="image/*" class="absolute inset-0 opacity-0 cursor-pointer" />
-      </div>
+      </button>
+      <button class="nav-item group" data-view="analytics" title="Analytics History">
+        <div class="w-12 h-12 rounded-xl flex items-center justify-center text-gold/40 group-hover:bg-gold/5 group-hover:text-gold transition-all">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 21H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h18a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2z"/><path d="M7 10v4"/><path d="M11 6v8"/><path d="M15 14V8"/><path d="M19 14v-2"/></svg>
+        </div>
+      </button>
+    </nav>
 
-      <!-- Processing indicator (hidden by default) -->
-      <div id="processing-indicator" class="hidden mt-6 flex flex-col items-center gap-3">
-        <div class="spinner w-10 h-10 border-3 border-gold/20 border-t-vermillion rounded-full animate-spin"></div>
-        <p id="processing-text" class="text-gold/60 text-sm animate-pulse">Analyzing image…</p>
-      </div>
+    <button id="logout-btn" class="w-10 h-10 flex items-center justify-center text-gold/20 hover:text-vermillion transition-colors">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+    </button>
+  </aside>
 
-      <!-- Detected image with bounding boxes (shown after processing) -->
-      <div id="detection-view" class="hidden w-full max-w-2xl mt-6">
-        <div class="relative rounded-xl overflow-hidden border border-gold/15 shadow-2xl">
-          <img id="detected-image" src="" alt="Detection result with bounding boxes" class="w-full" />
-          <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-ink/90 to-transparent p-4">
-            <p id="detection-summary" class="text-cream text-sm font-medium"></p>
+  <!-- MAIN MONITOR VIEW (SPA View 1) -->
+  <main id="view-monitor" class="ml-20 min-h-screen flex hidden">
+    <!-- SECTOR LIST SIDEBAR -->
+    <aside id="sector-sidebar" class="w-[300px] border-r border-gold/5 bg-ink-light flex flex-col">
+      <div class="p-6 border-b border-gold/5">
+        <h3 class="font-display text-2xl italic">Sectors</h3>
+        <p class="text-[10px] uppercase text-gold/40 tracking-widest mt-1">Active Surveillance Nodes</p>
+      </div>
+      <div id="sector-list" class="flex-1 overflow-y-auto p-4 space-y-2">
+        <!-- Dynamic Sectors -->
+      </div>
+    </aside>
+
+    <!-- CENTER PREVIEW -->
+    <section class="flex-1 flex flex-col p-8 bg-ink relative">
+      <div class="flex items-center justify-between mb-8">
+        <div>
+          <h2 id="current-sector-title" class="font-display text-4xl italic">Initializing System…</h2>
+          <div class="flex items-center gap-2 mt-1">
+             <span class="w-2 h-2 rounded-full bg-vermillion animate-pulse shadow-[0_0_8px_#B53325]"></span>
+             <span id="monitor-status-text" class="text-[10px] uppercase tracking-widest text-gold/60">Real-time Stream Integration</span>
+          </div>
+        </div>
+        <div class="flex items-center gap-6">
+          <div class="text-right">
+            <div id="live-clock" class="text-2xl font-light tracking-tighter">--:--:--</div>
+            <div id="live-date" class="text-[10px] uppercase text-gold/30 tracking-widest">---</div>
+          </div>
+          <div class="h-10 w-px bg-gold/10"></div>
+          <div class="flex items-center gap-3">
+             <div class="text-right">
+               <span id="admin-display-name" class="block text-sm font-semibold">Admin</span>
+               <span class="text-[10px] text-gold/40 uppercase">Authorized Officer</span>
+             </div>
+             <div class="w-10 h-10 rounded-full bg-gold/10 border border-gold/20 flex items-center justify-center italic font-display text-gold">A</div>
           </div>
         </div>
       </div>
-    </section>
 
-    <!--  RIGHT PANEL: Violation Cards Sidebar  -->
-    <aside id="sidebar" class="w-[420px] border-l border-gold/10 flex flex-col bg-ink/60 backdrop-blur-sm">
-      <!-- Sidebar header -->
-      <div class="p-4 border-b border-gold/10 flex items-center justify-between">
-        <h2 class="font-display text-lg text-cream">Violation Feed</h2>
-        <button id="clear-cards-btn" class="text-xs text-gold/40 hover:text-vermillion transition-colors px-2 py-1 rounded border border-gold/10 hover:border-vermillion/30">Clear All</button>
-      </div>
+      <div class="flex-1 flex flex-col items-center justify-center">
+        <!-- CCTV PLAYER -->
+        <div id="video-container" class="w-full max-w-4xl aspect-video rounded-3xl border border-gold/10 bg-black overflow-hidden shadow-2xl relative group">
+          <video id="main-video" class="w-full h-full object-cover" muted loop playsinline></video>
+          <div id="video-overlay" class="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent p-6 flex flex-col justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+             <p id="video-meta" class="text-xs text-gold/60">CCTV 4K FEED • ENCRYPTED TUNNEL • SECTOR <span id="meta-sector-id">0</span></p>
+          </div>
+          <div id="safe-pulse" class="absolute inset-0 bg-emerald-500/10 opacity-0 pointer-events-none transition-opacity"></div>
+        </div>
 
-      <!-- Scrollable cards container -->
-      <div id="cards-container" class="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin">
-        <!-- Empty state -->
-        <div id="empty-state" class="flex flex-col items-center justify-center h-full text-center opacity-60">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#DFBC94" stroke-width="1" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-          <p class="mt-4 text-gold/50 text-sm">No violations detected yet.<br/>Upload an image to begin scanning.</p>
+        <div class="mt-8 flex gap-4">
+           <div class="px-6 py-4 bg-ink-light border border-gold/10 rounded-2xl flex items-center gap-4">
+              <div class="w-10 h-10 rounded-lg bg-gold/5 flex items-center justify-center text-gold">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+              </div>
+              <div>
+                <span class="text-[10px] text-gold/40 uppercase block">Engine Status</span>
+                <span id="colab-status-text" class="text-sm font-semibold">Connecting to Neural Net…</span>
+              </div>
+           </div>
+           <div class="px-6 py-4 bg-ink-light border border-gold/10 rounded-2xl flex items-center gap-4">
+              <div class="w-10 h-10 rounded-lg bg-gold/5 flex items-center justify-center text-gold">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+              </div>
+              <div>
+                <span class="text-[10px] text-gold/40 uppercase block">Total Violations</span>
+                <span id="violation-count" class="text-sm font-semibold">0</span>
+              </div>
+           </div>
         </div>
       </div>
 
-      <!-- Minimized cards stack at bottom -->
-      <div id="minimized-stack" class="border-t border-gold/10 max-h-[200px] overflow-y-auto"></div>
+      <canvas id="capture-canvas" class="hidden"></canvas>
+    </section>
+
+    <!-- RIGHT VIOLATION FEED -->
+    <aside id="violation-sidebar" class="w-[450px] border-l border-gold/10 bg-ink-medium/30 backdrop-blur-md flex flex-col">
+       <div class="p-6 border-b border-gold/5 flex items-center justify-between">
+          <div>
+            <h3 class="font-display text-2xl italic text-vermillion">Alert Feed</h3>
+            <p class="text-[10px] uppercase text-gold/40 tracking-widest mt-1">Real-time Interference</p>
+          </div>
+          <button id="clear-alerts" class="text-[10px] text-gold/30 hover:text-vermillion hover:border-vermillion/50 px-3 py-1 border border-gold/10 rounded uppercase transition-all">Purgatory</button>
+       </div>
+       <div id="violation-stack" class="flex-1 overflow-y-auto p-6 space-y-6">
+          <!-- Live Alerts -->
+          <div id="empty-alerts" class="h-full flex flex-col items-center justify-center text-center opacity-30 grayscale">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#DFBC94" stroke-width="1"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+            <p class="italic font-display text-xl mt-4">Static Environment Clean</p>
+          </div>
+       </div>
     </aside>
   </main>
 
-  <!--  AUDIO ELEMENT — used for TTS playback  -->
-  <audio id="tts-audio" preload="none"></audio>
+  <!-- ANALYTICS VIEW (SPA View 2) -->
+  <main id="view-analytics" class="ml-20 min-h-screen bg-ink-light hidden p-12">
+    <div class="max-w-[1400px] mx-auto">
+      <header class="flex items-center justify-between mb-12">
+        <div>
+          <h2 class="font-display text-5xl italic mb-2">Registry Logs</h2>
+          <p class="text-gold/50 text-sm tracking-wide">Comprehensive historical data of all site violations and resolutions.</p>
+        </div>
+        <button id="refresh-analytics" class="flex items-center gap-2 bg-gold/5 text-gold border border-gold/10 px-6 py-3 rounded-xl hover:bg-gold/10 transition-all font-semibold">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 16.5 15"/></svg>
+          Sync Records
+        </button>
+      </header>
 
-  <!--  TOAST NOTIFICATION CONTAINER  -->
-  <div id="toast-container" class="fixed bottom-6 right-6 z-[60] flex flex-col gap-3 pointer-events-none"></div>
+      <div class="bg-ink border border-gold/10 rounded-2xl overflow-hidden shadow-2xl">
+        <table class="w-full text-left">
+          <thead>
+            <tr class="bg-gold/5 text-[10px] uppercase tracking-[0.2em] text-gold/40">
+              <th class="px-8 py-5 font-semibold">Incident Identifier</th>
+              <th class="px-8 py-5 font-semibold">Sector Node</th>
+              <th class="px-8 py-5 font-semibold">Chronology</th>
+              <th class="px-8 py-5 font-semibold">Classification</th>
+              <th class="px-8 py-5 font-semibold">Evidence</th>
+              <th class="px-8 py-5 font-semibold">State</th>
+              <th class="px-8 py-5 font-semibold text-right">Action</th>
+            </tr>
+          </thead>
+          <tbody id="incidents-table-body" class="divide-y divide-gold/5">
+            <!-- Dynamic Incidents -->
+          </tbody>
+        </table>
+        <div id="analytics-empty" class="p-20 text-center hidden">
+          <p class="font-display text-3xl italic text-gold/20">The archives are empty.</p>
+        </div>
+      </div>
+    </div>
+  </main>
 
-  <!--  SCRIPTS  -->
+  <!-- TOASTS -->
+  <div id="toast-container" class="fixed bottom-10 right-10 z-[200] space-y-4"></div>
+
+  <!-- SCRIPTS -->
   <script src="/static/app.js"></script>
 </body>
 </html>
