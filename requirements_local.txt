@@ -9,3 +9,4 @@ python-dotenv==1.0.1    # Loads .env file into environment variables
 sqlalchemy==2.0.30      # SQL toolkit and Object Relational Mapper
 psycopg2-binary  # PostgreSQL database adapter
 passlib[bcrypt]==1.7.4  # Password hashing library
+python-jose[cryptography]==3.3.0 # JWT token generation and validation

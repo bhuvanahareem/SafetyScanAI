@@ -191,3 +191,23 @@ tr:hover td {
   pointer-events: none;
   transform: scale(0.98);
 }
+
+/* SETTINGS MODAL */
+#settings-modal.active {
+  opacity: 1;
+  pointer-events: auto;
+}
+#settings-modal.active #settings-container {
+  transform: scale(1);
+}
+.settings-tab {
+  border-left: 2px solid transparent;
+}
+.settings-tab.active {
+  background: rgba(223, 188, 148, 0.1);
+  color: var(--gold);
+  border-left-color: var(--vermillion);
+}
+.crud-row {
+  animation: fadeIn 0.3s ease-out;
+}

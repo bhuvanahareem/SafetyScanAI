@@ -595,6 +595,8 @@ import threading
 import time
 import subprocess
 import re
+import os
+import uvicorn
 
 def get_free_port(start_port=8001):
     """Finds an available port starting from start_port."""
@@ -609,6 +611,7 @@ def get_free_port(start_port=8001):
 PORT = get_free_port()
 
 def start_server():
+    # Ensure 'colab_app' is defined in your previous cells
     uvicorn.run(colab_app, host="0.0.0.0", port=PORT, log_level="error")
 
 # 1. Start uvicorn on the free port
@@ -618,37 +621,28 @@ server_thread.start()
 time.sleep(3) # Wait for Uvicorn to initialize
 
 print(f"\n{'='*60}")
-print(f"  STARTING TUNNEL...")
+print(f"   STARTING TUNNEL...")
 
-#  OPTION A: Localtunnel 
-print("Starting Localtunnel (npm install -g localtunnel -q)...")
+# --- CRITICAL FIX: Initialize public_url ---
+public_url = None 
+
+#  OPTION A: Cloudflared (Primary)
+print("Starting Cloudflare TryTunnel...")
 try:
-    subprocess.check_call("npm install -g localtunnel -q", shell=True)
-except:
-    pass
-
-lt_process = subprocess.Popen(["lt", "--port", str(PORT)], stdout=subprocess.PIPE, text=True)
-public_url = None
-# non-blocking read
-for line in lt_process.stdout:
-    line_str = line.strip()
-    if "your url is:" in line_str:
-        public_url = line_str.replace("your url is: ", "")
-        break
-
-if not public_url:
-    print("Localtunnel failed. Using Cloudflare TryTunnel fallback...")
-
-    #  OPTION B: Cloudflared (Fallback) 
+    # Install cloudflared if not present
     subprocess.check_call("wget -q -nc https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O /usr/local/bin/cloudflared", shell=True)
     subprocess.check_call("chmod +x /usr/local/bin/cloudflared", shell=True)
-    import os
+    
+    # Start the tunnel process
     cf_process = subprocess.Popen(["cloudflared", "tunnel", "--url", f"http://localhost:{PORT}"], stderr=subprocess.PIPE)
-
-    # wait a few seconds for the URL to appear 
-    time.sleep(5)
+    
+    # Give cloudflared more time to generate the ephemeral URL
+    time.sleep(12) 
+    
     os.set_blocking(cf_process.stderr.fileno(), False)
-    while not public_url:
+    
+    # Capture the URL from the log output
+    while True:
         line = cf_process.stderr.readline()
         if not line: break
         line_str = line.decode('utf-8')
@@ -656,12 +650,35 @@ if not public_url:
         if match:
             public_url = match.group(1)
             break
+except Exception as e:
+    print(f"Cloudflare failed to start: {e}")
 
+#  OPTION B: Localtunnel (Fallback)
+if not public_url:
+    print("Cloudflare timed out or failed. Falling back to Localtunnel...")
+    try:
+        subprocess.check_call("npm install -g localtunnel -q", shell=True)
+        
+        lt_process = subprocess.Popen(["lt", "--port", str(PORT)], stdout=subprocess.PIPE, text=True)
+        
+        # Wait for Localtunnel to provide the URL
+        time.sleep(8)
+        for line in lt_process.stdout:
+            line_str = line.strip()
+            if "your url is:" in line_str:
+                public_url = line_str.replace("your url is: ", "")
+                break
+    except Exception as e:
+        print(f"Localtunnel fallback failed: {e}")
+
+# Final Output
 print(f"\n{'='*60}")
-print(f"  COLAB API IS LIVE (EPHEMERAL MODE)")
-print(f"  Public URL: {public_url}")
+if public_url:
+    print(f"   COLAB API IS LIVE (EPHEMERAL MODE)")
+    print(f"   Public URL: {public_url}")
+else:
+    print(f"   ERROR: Could not establish a public tunnel.")
 print(f"{'='*60}")
-
 #======================================================================================================================================================
 #======================================================================================================================================================
 #====================================================================================================================================================== 

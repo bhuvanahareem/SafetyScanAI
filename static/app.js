@@ -6,11 +6,13 @@
 let state = {
   view: 'auth', // auth, setup, monitor, analytics
   user: JSON.parse(localStorage.getItem('ss_user')) || null,
+  token: localStorage.getItem('ss_token') || null,
   activeSector: null,
   sectors: [],
   violationCount: 0,
-  monitorInterval: null,
-  isAnalyzing: false,
+  // Per-sector interval map: { [sectorId]: intervalId }
+  sectorIntervals: {},
+  isAnalyzingBySector: {}, // { [sectorId]: boolean }
   ws: null
 };
 
@@ -22,9 +24,32 @@ document.addEventListener('DOMContentLoaded', () => {
   setInterval(checkSystemHealth, 15000);
 });
 
-function initSPA() {
-  if (state.user) {
-    autoSwitchToMain();
+async function authFetch(url, options = {}) {
+  const headers = options.headers || {};
+  if (state.token) {
+    headers['Authorization'] = `Bearer ${state.token}`;
+  }
+  options.headers = headers;
+  const res = await fetch(url, options);
+  if (res.status === 401) {
+    handleLogout();
+  }
+  return res;
+}
+
+async function initSPA() {
+  if (state.token) {
+    try {
+      const res = await authFetch('/me');
+      if (res.ok) {
+        state.user = await res.json();
+        autoSwitchToMain();
+      } else {
+        handleLogout();
+      }
+    } catch (err) {
+      handleLogout();
+    }
   } else {
     showView('auth');
   }
@@ -35,7 +60,7 @@ function initSPA() {
 /** Determines if we go to Monitor or Setup based on sectors existence */
 async function autoSwitchToMain() {
   try {
-    const res = await fetch(`/sectors/${state.user.user_id}`);
+    const res = await authFetch(`/sectors/${state.user.user_id}`);
     const sectors = await res.json();
     if (sectors && sectors.length > 0) {
       state.sectors = sectors;
@@ -126,11 +151,31 @@ function setupEventListeners() {
     btn.onclick = () => showView(btn.dataset.view);
   });
 
+  // Settings
+  document.getElementById('settings-btn').onclick = openSettings;
+  document.getElementById('close-settings-btn').onclick = closeSettings;
+  document.getElementById('settings-logout-btn').onclick = handleLogout;
+  
+  // Settings Tabs
+  document.querySelectorAll('.settings-tab').forEach(tab => {
+     tab.onclick = (e) => {
+        document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
+        e.target.classList.add('active');
+        document.querySelectorAll('.settings-view').forEach(v => v.classList.add('hidden'));
+        document.getElementById(e.target.dataset.target).classList.remove('hidden');
+     }
+  });
+
+  document.getElementById('admin-profile-form').onsubmit = saveAdminProfile;
+  document.getElementById('add-sector-row-btn').onclick = () => addSectorRow(null);
+  document.getElementById('save-sectors-btn').onclick = saveSectorChanges;
+
   // Logout
-  document.getElementById('logout-btn').onclick = () => {
-    localStorage.removeItem('ss_user');
-    location.reload();
-  };
+  document.getElementById('logout-btn').onclick = handleLogout;
+
+  // Engine Controls
+  document.getElementById('start-engine-btn').onclick = startEngine;
+  document.getElementById('stop-engine-btn').onclick = stopEngine;
 
   // Analytics
   document.getElementById('refresh-analytics').onclick = loadAnalytics;
@@ -168,9 +213,20 @@ function toggleAuthMode(mode) {
 
 function handleAuthSuccess(data) {
   state.user = data;
+  state.token = data.access_token;
   localStorage.setItem('ss_user', JSON.stringify(data));
+  localStorage.setItem('ss_token', data.access_token);
   document.getElementById('admin-display-name').textContent = data.admin_name;
   autoSwitchToMain();
+}
+
+function handleLogout() {
+  if (state.token) {
+     authFetch('/logout', { method: 'POST' }).catch(() => {});
+  }
+  localStorage.removeItem('ss_user');
+  localStorage.removeItem('ss_token');
+  location.reload();
 }
 
 function showAuthError(msg) {
@@ -238,7 +294,7 @@ async function finalizeSiteSetup() {
       // Upload video first
       const videoFormData = new FormData();
       videoFormData.append('file', videoFile);
-      const vidRes = await fetch('/upload-sector-video', { method: 'POST', body: videoFormData });
+      const vidRes = await authFetch('/upload-sector-video', { method: 'POST', body: videoFormData });
       const vidData = await vidRes.json();
 
       sectorsToUpload.push({
@@ -251,10 +307,9 @@ async function finalizeSiteSetup() {
 
     // Save metadata
     const setupData = new FormData();
-    setupData.append('admin_id', state.user.user_id);
     setupData.append('sectors_json', JSON.stringify(sectorsToUpload));
     
-    const res = await fetch('/setup-site', { method: 'POST', body: setupData });
+    const res = await authFetch('/setup-site', { method: 'POST', body: setupData });
     if (res.ok) {
       showToast('System configured successfully.');
       autoSwitchToMain();
@@ -275,9 +330,65 @@ function initMonitor() {
   document.getElementById('admin-display-name').textContent = state.user.admin_name;
   switchSector(state.activeSector.id);
   
-  // Start Sampling Loop (10 seconds)
-  if (state.monitorInterval) clearInterval(state.monitorInterval);
-  state.monitorInterval = setInterval(captureFrame, 10000);
+  // Start Engine by default
+  startEngine();
+}
+
+function startEngine() {
+  // Stop existing intervals without resetting the UI during internal call
+  _clearAllIntervals();
+  // Launch a staggered parallel interval for every sector
+  // Stagger by 3 s per sector so the Colab GPU isn't hammered simultaneously
+  state.sectors.forEach((sector, idx) => {
+    const delay = idx * 3000;
+    setTimeout(() => {
+      if (Object.keys(state.sectorIntervals).length > 0 || idx === 0) {
+        // Only register if engine is still running (not stopped during delay)
+        state.sectorIntervals[sector.id] = setInterval(
+          () => captureFrameForSector(sector.id),
+          10000
+        );
+      }
+    }, delay);
+  });
+  updateEngineUI(true);
+}
+
+/** Internal helper — clears all intervals without touching the UI */
+function _clearAllIntervals() {
+  Object.values(state.sectorIntervals).forEach(clearInterval);
+  state.sectorIntervals = {};
+  state.isAnalyzingBySector = {};
+}
+
+function stopEngine() {
+  _clearAllIntervals();
+  updateEngineUI(false);
+}
+
+function updateEngineUI(running) {
+  const statusLabel = document.getElementById('monitor-status-text');
+  const pulse = document.querySelector('.animate-pulse');
+  const startBtn = document.getElementById('start-engine-btn');
+  const stopBtn = document.getElementById('stop-engine-btn');
+
+  if (running) {
+    statusLabel.textContent = "Real-time Stream Integration";
+    if (pulse) {
+        pulse.classList.add('bg-vermillion', 'animate-pulse');
+        pulse.classList.remove('bg-gold/20');
+    }
+    startBtn.classList.add('opacity-40', 'cursor-not-allowed');
+    stopBtn.classList.remove('opacity-40', 'cursor-not-allowed');
+  } else {
+    statusLabel.textContent = "Neural Engine Offline";
+    if (pulse) {
+        pulse.classList.remove('bg-vermillion', 'animate-pulse');
+        pulse.classList.add('bg-gold/20');
+    }
+    stopBtn.classList.add('opacity-40', 'cursor-not-allowed');
+    startBtn.classList.remove('opacity-40', 'cursor-not-allowed');
+  }
 }
 
 function renderSectors() {
@@ -305,60 +416,123 @@ function switchSector(id) {
   if (!sector) return;
   state.activeSector = sector;
   
-  // Update UI
+  // Update UI labels
   document.getElementById('current-sector-title').textContent = sector.sector_name;
   document.getElementById('meta-sector-id').textContent = sector.id;
   renderSectors();
 
-  // Update Video
+  // Update Video — guard against null video_filename to prevent /null 404s
   const video = document.getElementById('main-video');
-  video.src = `/static/uploads/sectors/${sector.video_filename}`;
-  video.play();
+  if (sector.video_filename) {
+    const newSrc = `/static/uploads/sectors/${sector.video_filename}`;
+    if (video.src !== newSrc) {
+      video.src = newSrc;
+    }
+    video.play().catch(() => {});
+  } else {
+    video.removeAttribute('src');
+    video.load();
+  }
   
   showToast(`Switched to ${sector.sector_name}`);
 }
 
+/** Captures a frame from the video element for the ACTIVE sector (display) */
 async function captureFrame() {
-  if (state.isAnalyzing || !state.activeSector) return;
+  if (state.activeSector) {
+    await captureFrameForSector(state.activeSector.id);
+  }
+}
 
-  const video = document.getElementById('main-video');
+/**
+ * Captures a frame for a specific sector's video element.
+ * Each sector's processing flag is tracked independently so one sector's
+ * slow analysis cannot block another sector's next capture.
+ */
+async function captureFrameForSector(sectorId) {
+  if (state.isAnalyzingBySector[sectorId]) return;
+  const sector = state.sectors.find(s => s.id === sectorId);
+  if (!sector || !sector.video_filename) return;
+
+  // We need a video element for this sector.
+  // For the active sector use the main video; others use hidden off-screen elements.
+  let video;
+  if (state.activeSector && state.activeSector.id === sectorId) {
+    video = document.getElementById('main-video');
+  } else {
+    // Use or create a hidden off-screen video element keyed to this sector
+    const offScreenId = `offscreen-video-${sectorId}`;
+    video = document.getElementById(offScreenId);
+    if (!video) {
+      video = document.createElement('video');
+      video.id = offScreenId;
+      video.src = `/static/uploads/sectors/${sector.video_filename}`;
+      video.muted = true;
+      video.loop = true;
+      video.crossOrigin = 'anonymous';
+      video.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;';
+      document.body.appendChild(video);
+      // Give video time to load before capturing
+      try { await video.play(); } catch(e) {}
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+
+  // Guard: video must have valid dimensions (i.e. it has loaded and is playing)
+  if (!video || video.videoWidth === 0 || video.videoHeight === 0 || video.readyState < 2) {
+    return;
+  }
+
   const canvas = document.getElementById('capture-canvas');
-  const statusLabel = document.getElementById('monitor-status-text');
-
-  // Capture
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
   const ctx = canvas.getContext('2d');
   ctx.drawImage(video, 0, 0);
 
-  statusLabel.textContent = "Analyzing Frame...";
-  state.isAnalyzing = true;
+  // Update status only for active sector
+  const statusLabel = document.getElementById('monitor-status-text');
+  if (state.activeSector && state.activeSector.id === sectorId) {
+    statusLabel.textContent = 'Analyzing Frame...';
+  }
+  state.isAnalyzingBySector[sectorId] = true;
 
   canvas.toBlob(async (blob) => {
+    // Guard: blob can be null if canvas is blank
+    if (!blob) {
+      state.isAnalyzingBySector[sectorId] = false;
+      return;
+    }
+
     const formData = new FormData();
-    formData.append('file', blob, `sector_${state.activeSector.id}_${Date.now()}.jpg`);
-    formData.append('sector_id', state.activeSector.id);
+    formData.append('file', blob, `sector_${sectorId}_${Date.now()}.jpg`);
+    formData.append('sector_id', sectorId);
     formData.append('admin_id', state.user.user_id);
 
     try {
-      const res = await fetch('/process-frame', { method: 'POST', body: formData });
+      const res = await authFetch('/process-frame', { method: 'POST', body: formData });
       const data = await res.json();
 
-      if (data.tier === 1 && data.status === 'safe') {
-        showSafePulse();
-        statusLabel.textContent = "Environment Clear";
-      } else if (data.status === 'processing') {
-        statusLabel.textContent = "Deep Analysis Running...";
-      } else if (data.status === 'complete') {
-        statusLabel.textContent = "Violation Recorded";
+      if (state.activeSector && state.activeSector.id === sectorId) {
+        if (data.tier === 1 && data.status === 'safe') {
+          showSafePulse();
+          statusLabel.textContent = 'Environment Clear';
+        } else if (data.status === 'processing') {
+          statusLabel.textContent = 'Deep Analysis Running...';
+        } else if (data.status === 'complete') {
+          statusLabel.textContent = 'Violation Recorded';
+        }
       }
     } catch (err) {
-      console.error('Frame process failed:', err);
-      statusLabel.textContent = "Static Connection Error";
+      console.error(`Frame process failed for sector ${sectorId}:`, err);
+      if (state.activeSector && state.activeSector.id === sectorId) {
+        statusLabel.textContent = 'Static Connection Error';
+      }
     } finally {
-      state.isAnalyzing = false;
+      state.isAnalyzingBySector[sectorId] = false;
       setTimeout(() => {
-        if (!state.isAnalyzing) statusLabel.textContent = "Real-time Stream Integration";
+        if (state.activeSector && state.activeSector.id === sectorId && !state.isAnalyzingBySector[sectorId]) {
+          statusLabel.textContent = 'Real-time Stream Integration';
+        }
       }, 2000);
     }
   }, 'image/jpeg', 0.8);
@@ -443,7 +617,7 @@ async function loadAnalytics() {
   body.innerHTML = '';
   
   try {
-    const res = await fetch('/incidents');
+    const res = await authFetch('/incidents');
     const data = await res.json();
     
     if (data.length === 0) {
@@ -453,6 +627,14 @@ async function loadAnalytics() {
     
     empty.classList.add('hidden');
     data.forEach(inc => {
+      const hasEvidence = inc.image_url && !inc.image_url.startsWith('data:');
+      const evidenceCell = hasEvidence
+        ? `<a href="${inc.image_url}" target="_blank" class="inline-flex items-center gap-2 group">
+             <img src="${inc.image_url}" alt="Evidence" class="w-10 h-10 object-cover rounded-lg border border-gold/20 group-hover:border-vermillion transition-all" onerror="this.style.display='none'" />
+             <span class="text-gold hover:text-cream text-[10px] uppercase underline tracking-widest font-bold">View Evidence</span>
+           </a>`
+        : `<span class="text-gold/20 text-[10px] uppercase font-bold">No Evidence</span>`;
+
       const row = document.createElement('tr');
       row.className = "group transition-colors";
       row.innerHTML = `
@@ -465,7 +647,7 @@ async function loadAnalytics() {
            <span class="px-3 py-1 bg-vermillion/10 text-vermillion-light text-[10px] rounded uppercase font-bold border border-vermillion/20">${inc.violation_type}</span>
         </td>
         <td class="px-8 py-6">
-           <button class="text-gold hover:text-cream text-[10px] uppercase underline tracking-widest font-bold" onclick="window.open('${inc.image_url}', '_blank')">View Evidence</button>
+           ${evidenceCell}
         </td>
         <td class="px-8 py-6">
            <span class="status-badge status-${inc.status.toLowerCase()}">${inc.status}</span>
@@ -485,7 +667,7 @@ async function resolveIncident(id, btn) {
   btn.disabled = true;
   btn.textContent = "...";
   try {
-    const res = await fetch(`/incidents/${id}/resolve`, { method: 'POST' });
+    const res = await authFetch(`/incidents/${id}/resolve`, { method: 'POST' });
     if (res.ok) {
       showToast(`Incident #${id} resolved.`);
       loadAnalytics();
@@ -532,4 +714,188 @@ function showToast(msg) {
     toast.style.transition = 'all 0.5s';
     setTimeout(() => toast.remove(), 500);
   }, 4000);
+}
+
+// 11. SETTINGS LOGIC
+function openSettings() {
+  document.getElementById('settings-modal').classList.add('active');
+  loadSettingsData();
+}
+
+function closeSettings() {
+  document.getElementById('settings-modal').classList.remove('active');
+}
+
+async function loadSettingsData() {
+  // Populate Profile
+  document.getElementById('setting-admin-name').value = state.user.admin_name || '';
+  document.getElementById('setting-admin-email').value = state.user.email || '';
+
+  // Populate Sectors
+  const list = document.getElementById('crud-sectors-list');
+  list.innerHTML = '';
+  try {
+     const res = await authFetch(`/sectors/${state.user.user_id}`);
+     const sectors = await res.json();
+     sectors.forEach(s => addSectorRow(s));
+  } catch (err) {}
+}
+
+function addSectorRow(sector = null) {
+  const isNew = !sector;
+  const list = document.getElementById('crud-sectors-list');
+  const div = document.createElement('div');
+  div.className = "crud-row space-y-3 bg-ink p-4 rounded-xl border border-gold/5 mb-3";
+  div.dataset.id = isNew ? 'new' : sector.id;
+  div.dataset.videoFilename = sector ? (sector.video_filename || '') : '';
+
+  div.innerHTML = `
+    <div class="flex items-center gap-3">
+      <input type="text" class="crud-s-name flex-1 bg-transparent border border-gold/10 rounded px-2 py-1 text-sm text-cream focus:border-vermillion/50 outline-none transition-all" placeholder="Sector Name" value="${sector ? sector.sector_name : ''}" required />
+      <input type="text" class="crud-s-sup flex-1 bg-transparent border border-gold/10 rounded px-2 py-1 text-sm text-cream focus:border-vermillion/50 outline-none transition-all" placeholder="Supervisor Name" value="${sector ? sector.supervisor_name : ''}" required />
+      <input type="email" class="crud-s-email flex-1 bg-transparent border border-gold/10 rounded px-2 py-1 text-sm text-cream focus:border-vermillion/50 outline-none transition-all" placeholder="Supervisor Email" value="${sector ? sector.supervisor_email : ''}" required />
+      <button type="button" class="text-vermillion/60 hover:text-vermillion p-2 transition-colors shrink-0" onclick="deleteSectorRow(this, ${isNew ? 'null' : sector.id})">
+         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+      </button>
+    </div>
+    <div class="relative flex items-center gap-3">
+      <label class="relative flex-1 flex items-center gap-3 px-3 py-2 bg-ink-light border border-dashed border-gold/20 rounded-lg cursor-pointer hover:border-vermillion/40 transition-colors">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#DFBC94" stroke-width="1.5"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+        <span class="crud-video-label text-[10px] text-gold/40 flex-1 truncate">
+          ${sector && sector.video_filename ? sector.video_filename : 'Replace CCTV Video (optional)'}
+        </span>
+        <input type="file" class="crud-video-file absolute inset-0 opacity-0 cursor-pointer" accept="video/*" />
+      </label>
+    </div>
+  `;
+
+  // Update label on file select
+  const fileInput = div.querySelector('.crud-video-file');
+  fileInput.onchange = (e) => {
+    const name = e.target.files[0]?.name || 'Replace CCTV Video (optional)';
+    div.querySelector('.crud-video-label').textContent = name;
+  };
+
+  list.appendChild(div);
+}
+
+async function deleteSectorRow(btn, id) {
+  if (id) {
+     if (!confirm("Are you sure? This will delete the sector and all its incidents.")) return;
+     try {
+       const res = await authFetch(`/sectors/${id}`, { method: 'DELETE' });
+       if (!res.ok) throw new Error();
+       showToast("Sector deleted.");
+     } catch (err) {
+       showToast("Failed to delete sector.");
+       return;
+     }
+  }
+  btn.closest('.crud-row').remove();
+}
+
+async function saveAdminProfile(e) {
+  e.preventDefault();
+  const name = document.getElementById('setting-admin-name').value;
+  const email = document.getElementById('setting-admin-email').value;
+  
+  const fd = new FormData();
+  fd.append('admin_name', name);
+  fd.append('email', email);
+  
+  try {
+     const res = await authFetch('/admin/profile', { method: 'PUT', body: fd });
+     if (res.ok) {
+        const data = await res.json();
+        state.user.admin_name = data.admin_name;
+        state.user.email = data.email;
+        localStorage.setItem('ss_user', JSON.stringify(state.user));
+        document.getElementById('admin-display-name').textContent = data.admin_name;
+        showToast("Profile updated successfully.");
+     } else {
+        const err = await res.json();
+        showToast(err.detail || "Update failed.");
+     }
+  } catch (err) {}
+}
+
+async function saveSectorChanges() {
+  const btn = document.getElementById('save-sectors-btn');
+  btn.disabled = true;
+  btn.textContent = "Saving...";
+  
+  const rows = document.querySelectorAll('.crud-row');
+  let errCount = 0;
+
+  for (const row of rows) {
+    const id = row.dataset.id;
+    const sName = row.querySelector('.crud-s-name').value;
+    const sSup = row.querySelector('.crud-s-sup').value;
+    const sEmail = row.querySelector('.crud-s-email').value;
+    const videoFile = row.querySelector('.crud-video-file')?.files[0];
+    
+    if (!sName || !sSup || !sEmail) continue;
+
+    // If a new video was selected, upload it first
+    let newVideoFilename = null;
+    if (videoFile) {
+      try {
+        const videoFd = new FormData();
+        videoFd.append('file', videoFile);
+        const vidRes = await authFetch('/upload-sector-video', { method: 'POST', body: videoFd });
+        if (vidRes.ok) {
+          const vidData = await vidRes.json();
+          newVideoFilename = vidData.filename;
+        }
+      } catch (e) { errCount++; }
+    }
+
+    const fd = new FormData();
+    fd.append('sector_name', sName);
+    fd.append('supervisor_name', sSup);
+    fd.append('supervisor_email', sEmail);
+    if (newVideoFilename) fd.append('video_filename', newVideoFilename);
+
+    try {
+      if (id === 'new') {
+        const res = await authFetch('/sectors/create', { method: 'POST', body: fd });
+        if (!res.ok) errCount++;
+      } else {
+        const res = await authFetch(`/sectors/${id}`, { method: 'PUT', body: fd });
+        if (!res.ok) errCount++;
+      }
+    } catch(err) {
+      errCount++;
+    }
+  }
+
+  try {
+     const res = await authFetch(`/sectors/${state.user.user_id}`);
+     const sectors = await res.json();
+     state.sectors = sectors;
+     
+     if (state.activeSector && !sectors.find(s => s.id === state.activeSector.id)) {
+        state.activeSector = sectors[0] || null;
+     }
+     
+     if(state.sectors.length > 0) {
+        renderSectors();
+        if (state.activeSector) {
+           document.getElementById('current-sector-title').textContent = state.activeSector.sector_name;
+           switchSector(state.activeSector.id);
+        }
+     } else {
+        // No sectors left
+        document.getElementById('sector-list').innerHTML = '';
+        document.getElementById('current-sector-title').textContent = "No active sectors";
+     }
+
+     if (errCount > 0) showToast("Saved with some errors.");
+     else showToast("All sectors saved successfully.");
+     
+     loadSettingsData(); 
+  } catch (err) {}
+
+  btn.disabled = false;
+  btn.textContent = "Save All Sector Changes";
 }
