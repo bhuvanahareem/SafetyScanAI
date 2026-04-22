@@ -181,6 +181,23 @@ async def login(email: str = Form(...), password: str = Form(...), db: Session =
 async def get_me(current_user: User = Depends(get_current_user)):
     return {"status": "success", "user_id": current_user.id, "admin_name": current_user.admin_name, "email": current_user.email}
 
+@app.post("/logout")
+async def logout():
+    return {"status": "success"}
+
+@app.put("/admin/profile")
+async def update_profile(
+    admin_name: str = Form(...),
+    email: str = Form(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    current_user.admin_name = admin_name
+    current_user.email = email
+    db.commit()
+    db.refresh(current_user)
+    return {"status": "success", "admin_name": current_user.admin_name, "email": current_user.email}
+
 @app.get("/sectors/{admin_id}")
 async def get_sectors(admin_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     if admin_id != current_user.id:
@@ -209,6 +226,68 @@ async def setup_site(sectors_json: str = Form(...), db: Session = Depends(get_db
             video_filename=s.get('video_filename')
         )
         db.add(new_sector)
+    db.commit()
+    return {"status": "success"}
+
+@app.post("/sectors/create")
+async def create_sector(
+    sector_name: str = Form(...),
+    supervisor_name: str = Form(...),
+    supervisor_email: str = Form(...),
+    video_filename: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    new_sector = Sector(
+        admin_id=current_user.id,
+        sector_name=sector_name,
+        supervisor_name=supervisor_name,
+        supervisor_email=supervisor_email,
+        video_filename=video_filename
+    )
+    db.add(new_sector)
+    db.commit()
+    db.refresh(new_sector)
+    return new_sector
+
+@app.get("/sectors/{sector_id}")
+async def get_sector(sector_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    sector = db.query(Sector).filter(Sector.id == sector_id, Sector.admin_id == current_user.id).first()
+    if not sector:
+        raise HTTPException(status_code=404, detail="Sector not found")
+    return sector
+
+@app.put("/sectors/{sector_id}")
+async def update_sector(
+    sector_id: int,
+    sector_name: str = Form(...),
+    supervisor_name: str = Form(...),
+    supervisor_email: str = Form(...),
+    video_filename: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    sector = db.query(Sector).filter(Sector.id == sector_id, Sector.admin_id == current_user.id).first()
+    if not sector:
+        raise HTTPException(status_code=404, detail="Sector not found")
+    
+    sector.sector_name = sector_name
+    sector.supervisor_name = supervisor_name
+    sector.supervisor_email = supervisor_email
+    if video_filename:
+        sector.video_filename = video_filename
+        
+    db.commit()
+    db.refresh(sector)
+    return sector
+
+@app.delete("/sectors/{sector_id}")
+async def delete_sector(sector_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    sector = db.query(Sector).filter(Sector.id == sector_id, Sector.admin_id == current_user.id).first()
+    if not sector:
+        raise HTTPException(status_code=404, detail="Sector not found")
+    
+    db.delete(sector)
     db.commit()
     return {"status": "success"}
 
