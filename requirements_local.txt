@@ -7,6 +7,7 @@ httpx==0.27.0           # Async HTTP client — calls Colab and n8n APIs
 websockets==12.0        # WebSocket support for real-time frontend push
 python-dotenv==1.0.1    # Loads .env file into environment variables
 sqlalchemy==2.0.30      # SQL toolkit and Object Relational Mapper
-psycopg2-binary  # PostgreSQL database adapter
+psycopg2-binary==2.9.9  # PostgreSQL database adapter
 passlib[bcrypt]==1.7.4  # Password hashing library
+bcrypt==4.0.1
 python-jose[cryptography]==3.3.0 # JWT token generation and validation

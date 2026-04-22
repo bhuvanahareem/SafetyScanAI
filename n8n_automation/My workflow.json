@@ -1,127 +1,127 @@
 {
-  "name": "My workflow",
-  "nodes": [
-    {
-      "parameters": {
-        "httpMethod": "POST",
-        "path": "safety-alert",
-        "options": {}
-      },
-      "type": "n8n-nodes-base.webhook",
-      "typeVersion": 2.1,
-      "position": [
-        -160,
-        -80
-      ],
-      "id": "bd0330f7-7534-41c8-9548-268d1210adbd",
-      "name": "Webhook",
-      "webhookId": "7f8044f9-2f2f-479d-882c-5290682b7b7a",
-      "alwaysOutputData": true
-    },
-    {
-      "parameters": {
-        "jsCode": "// Convert the base64 image from the webhook payload into a binary file\n// so Gmail can attach it to the email\n// 1. Get the JSON data from the Webhook\nconst input = $input.first().json;\n\n// 2. Extract data from the \"body\" object\nconst body = input.body || {}; \nconst imageBase64 = body.image_base64;\nconst filename = body.image_filename || 'violation.jpg';\n\n// 3. STOP logic: Ensure we have an agent report and it's not a 'safe' detection\nif (!body.agent_report || body.violation_class === 'safe') {\n  return []; \n}\n\nif (!imageBase64) {\n  throw new Error(\"Could not find image_base64 inside the webhook body!\");\n}\n\n// 4. Return to n8n with the binary attachment\n// We spread the 'body' object to ensure all fields are available directly\nreturn [\n  {\n    json: {\n      ...body\n    },\n    binary: {\n      attachment: {\n        data: imageBase64,\n        mimeType: 'image/jpeg',\n        fileName: filename,\n        base64: true\n      }\n    }\n  }\n];"
-      },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        224,
-        -80
-      ],
-      "id": "b911078d-1481-4615-a07b-3cba8191e929",
-      "name": "Code in JavaScript",
-      "alwaysOutputData": true
-    },
-    {
-      "parameters": {
-        "sendTo": "bhuvanahareendran@gmail.com",
-        "subject": "=Safety Violation: {{ $json.violation_class }} — {{ $json.timestamp }}",
-        "message": "=<h2>⚠️ Safety Violation Report</h2>  <p><strong>Violation:</strong> {{ $json.violation_class }}</p>  <p><strong>Time:</strong> {{ $json.timestamp }}</p>  <hr>  <h3>Compliance Report (Reviewed by Legal Critic)</h3>  <div style=\"white-space: pre-wrap; background: #f9f9f9; padding: 15px; border-left: 5px solid #d9534f;\">   {{ $json.agent_report }} </div> <hr>  <h3>OSHA Reference</h3>  <div style=\"white-space: pre-wrap; color: #555; font-style: italic;\">   {{ $json.rag_snippet }} </div>",
-        "options": {
-          "attachmentsUi": {
-            "attachmentsBinary": [
-              {
-                "property": "attachment"
-              }
+    "name": "My workflow",
+    "nodes": [
+        {
+            "parameters": {
+                "httpMethod": "POST",
+                "path": "safety-alert",
+                "options": {}
+            },
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 2.1,
+            "position": [
+                -160,
+                -80
+            ],
+            "id": "bd0330f7-7534-41c8-9548-268d1210adbd",
+            "name": "Webhook",
+            "webhookId": "7f8044f9-2f2f-479d-882c-5290682b7b7a",
+            "alwaysOutputData": true
+        },
+        {
+            "parameters": {
+                "jsCode": "// 1. Get the JSON data from the Webhook\nconst input = $input.first().json;\n\n// 2. Identify the data source\n// In n8n, the data might be at the top level OR inside a 'body' property.\n// This line handles both cases automatically.\nconst data = input.body ? input.body : input;\n\n// 3. Extract key fields for logic\nconst imageBase64 = data.image_base64;\nconst filename = data.image_filename || 'violation.jpg';\n\n// 4. STOP logic: Ensure we have an agent report and it's not a 'safe' detection\nif (!data.agent_report || data.violation_class === 'safe') {\n  return []; \n}\n\nif (!imageBase64) {\n  throw new Error(\"Could not find image_base64 inside the webhook body!\");\n}\n\n// 5. Return to n8n with binary and JSON merged\n// Merging 'data' here ensures {{ $json.user_email }} and {{ $json.agent_report }} \n// are available to subsequent nodes (like Gmail).\nreturn [\n  {\n    json: {\n      ...data  // This \"flattens\" everything into the $json object\n    },\n    binary: {\n      attachment: {\n        data: imageBase64,\n        mimeType: 'image/jpeg',\n        fileName: filename,\n        base64: true\n      }\n    }\n  }\n];\n"
+            },
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                224,
+                -80
+            ],
+            "id": "b911078d-1481-4615-a07b-3cba8191e929",
+            "name": "Code in JavaScript",
+            "alwaysOutputData": true
+        },
+        {
+            "parameters": {
+                "sendTo": "={{ $json.supervisor_email }}",
+                "subject": "=SAFETY NOTICE: PPE Compliance Violation [{{ $json.sector_name }}] – {{ $json.timestamp.substring(0, 10) }}",
+                "message": "=<div style=\"font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #1a1a1a; max-width: 600px; border: 1px solid #eee; padding: 20px; border-radius: 8px;\">\n  \n  <div style=\"border-bottom: 2px solid #B53325; padding-bottom: 10px; margin-bottom: 20px;\">\n    <h2 style=\"color: #B53325; margin: 0; font-size: 18px;\">Security Intelligence Alert</h2>\n    <p style=\"margin: 0; font-size: 12px; color: #666;\">Sector Node: {{ $json.sector_name }} (ID: {{ $json.sector_id }})</p>\n  </div>\n\n  <!-- The AI generated formal report (already includes Greeting and Admin Signature) -->\n  <div style=\"white-space: pre-wrap; background: #ffffff; padding: 10px 0; font-size: 15px;\">\n{{ $json.agent_report }}\n  </div>\n\n  <!-- Legal Reference Section -->\n  <hr style=\"border: 0; border-top: 1px dashed #ccc; margin: 30px 0 15px 0;\">\n  <p style=\"font-size: 0.85rem; color: #666; font-style: italic; background: #fdf6f5; padding: 10px; border-radius: 4px;\">\n    <strong>Legal Reference (OSHA):</strong><br>\n    {{ $json.rag_snippet }}\n  </p>\n  \n  <p style=\"font-size: 0.7rem; color: #999; margin-top: 20px; text-align: center; border-top: 1px solid #eee; pt: 10px;\">\n    Report ID: {{ $json.violation_class }}-{{ $json.timestamp }}<br>\n    <strong>SafetyScanAI Command Center</strong> • 4K Surveillance Integration\n  </p>\n</div>\n",
+                "options": {
+                    "attachmentsUi": {
+                        "attachmentsBinary": [
+                            {
+                                "property": "attachment"
+                            }
+                        ]
+                    }
+                }
+            },
+            "type": "n8n-nodes-base.gmail",
+            "typeVersion": 2.2,
+            "position": [
+                624,
+                -80
+            ],
+            "id": "4b4c2a30-fbaa-429f-a23c-c949ac171ca5",
+            "name": "Send a message",
+            "webhookId": "8fd14fd9-7463-49bc-bf3b-bfa119558ed8",
+            "alwaysOutputData": true,
+            "credentials": {
+                "gmailOAuth2": {
+                    "id": "aCYC6hm0Pul9tOw6",
+                    "name": "Gmail account"
+                }
+            }
+        },
+        {
+            "parameters": {},
+            "type": "n8n-nodes-base.manualTrigger",
+            "typeVersion": 1,
+            "position": [
+                -48,
+                -368
+            ],
+            "id": "36745879-5841-49e3-be7c-62bfff05ea2b",
+            "name": "When clicking ‘Execute workflow’"
+        }
+    ],
+    "pinData": {},
+    "connections": {
+        "Webhook": {
+            "main": [
+                [
+                    {
+                        "node": "Code in JavaScript",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
             ]
-          }
+        },
+        "Code in JavaScript": {
+            "main": [
+                [
+                    {
+                        "node": "Send a message",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "When clicking ‘Execute workflow’": {
+            "main": [
+                []
+            ]
+        },
+        "Send a message": {
+            "main": [
+                []
+            ]
         }
-      },
-      "type": "n8n-nodes-base.gmail",
-      "typeVersion": 2.2,
-      "position": [
-        624,
-        -80
-      ],
-      "id": "4b4c2a30-fbaa-429f-a23c-c949ac171ca5",
-      "name": "Send a message",
-      "webhookId": "8fd14fd9-7463-49bc-bf3b-bfa119558ed8",
-      "alwaysOutputData": true,
-      "credentials": {
-        "gmailOAuth2": {
-          "id": "aCYC6hm0Pul9tOw6",
-          "name": "Gmail account"
-        }
-      }
     },
-    {
-      "parameters": {},
-      "type": "n8n-nodes-base.manualTrigger",
-      "typeVersion": 1,
-      "position": [
-        -48,
-        -368
-      ],
-      "id": "36745879-5841-49e3-be7c-62bfff05ea2b",
-      "name": "When clicking ‘Execute workflow’"
-    }
-  ],
-  "pinData": {},
-  "connections": {
-    "Webhook": {
-      "main": [
-        [
-          {
-            "node": "Code in JavaScript",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "active": true,
+    "settings": {
+        "executionOrder": "v1",
+        "binaryMode": "separate",
+        "availableInMCP": false
     },
-    "Code in JavaScript": {
-      "main": [
-        [
-          {
-            "node": "Send a message",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "versionId": "4529c157-563c-4c37-80fc-40172da4a230",
+    "meta": {
+        "templateCredsSetupCompleted": true,
+        "instanceId": "58cc5596215fa3abcd897377a07ce14ffc2b8d44015b1daa05859805d57a0f37"
     },
-    "When clicking ‘Execute workflow’": {
-      "main": [
-        []
-      ]
-    },
-    "Send a message": {
-      "main": [
-        []
-      ]
-    }
-  },
-  "active": true,
-  "settings": {
-    "executionOrder": "v1",
-    "binaryMode": "separate",
-    "availableInMCP": false
-  },
-  "versionId": "996d674d-54ab-4a20-90f7-4601d57dff27",
-  "meta": {
-    "templateCredsSetupCompleted": true,
-    "instanceId": "58cc5596215fa3abcd897377a07ce14ffc2b8d44015b1daa05859805d57a0f37"
-  },
-  "id": "xMbgneM8zAcVUqi5",
-  "tags": []
+    "id": "xMbgneM8zAcVUqi5",
+    "tags": []
 }
